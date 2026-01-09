@@ -1,0 +1,24 @@
+{
+  "created_at": "",
+  "last_updated": "2026-01-09T12:22:19.176592",
+  "total_sections": 85,
+  "total_documents": 8,
+  "by_folder": {
+    "normative": {
+      "documents": 4,
+      "sections": 65
+    },
+    "methodology": {
+      "documents": 2,
+      "sections": 10
+    },
+    "structured": {
+      "documents": 1,
+      "sections": 9
+    },
+    "expertise": {
+      "documents": 1,
+      "sections": 1
+    }
+  }
+}
