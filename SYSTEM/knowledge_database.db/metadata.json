@@ -1,6 +1,6 @@
 {
   "created_at": "",
-  "last_updated": "2026-01-09T12:22:19.176592",
+  "last_updated": "2026-01-10T22:54:13.479127",
   "total_sections": 85,
   "total_documents": 8,
   "by_folder": {
@@ -20,5 +20,10 @@
       "documents": 1,
       "sections": 1
     }
-  }
+  },
+  "supported_extensions": [
+    ".md",
+    ".txt",
+    ".rtf"
+  ]
 }
