@@ -14,16 +14,126 @@ import streamlit as st
 # КОНФИГУРАЦИЯ ПАПОК И ТИПОВ ДОКУМЕНТОВ
 # ==============================================
 
-CONFIG = {
-    "folders": {
-        "normative": r"D:\YandexDisk\WORK\EXPERT\BD\NORMATIVE",      # Нормативные - разделение по "ГЛАВА"
-        "methodology": r"D:\YandexDisk\WORK\EXPERT\BD\METHODOLOGY", # Методические - разделение по заголовкам markdown
-        "structured": r"D:\YandexDisk\WORK\EXPERT\BD\STRUCTURED",   # Структурированные - разделение по квадратным скобкам
-        "expertise": r"D:\YandexDisk\WORK\EXPERT\BD\EXPERTISE"      # Экспертные - целиком
-    },
-    "database_path": r".\knowledge_database.db",
-    "templates_path": r".\templates.json"
-}
+def load_config():
+    """
+    Загружает конфигурацию из JSON файла.
+    Если файл не найден или поврежден, используются значения по умолчанию.
+    """
+    config_path = Path(__file__).parent / "config.json"
+    
+    if config_path.exists():
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                print(f"✅ Конфигурация загружена из {config_path}")
+                
+                # Проверяем обязательные ключи
+                required_keys = ["folders", "database_path", "templates_path"]
+                for key in required_keys:
+                    if key not in config:
+                        print(f"⚠ В конфигурации отсутствует ключ: {key}")
+                
+                return config
+        except json.JSONDecodeError as e:
+            print(f"❌ Ошибка в формате JSON (строка {e.lineno}, позиция {e.pos}): {e.msg}")
+        except Exception as e:
+            print(f"❌ Ошибка загрузки конфигурации: {e}")
+    
+    # Конфигурация по умолчанию если файл не найден или поврежден
+    print("⚠ Файл config.json не найден или поврежден. Используются значения по умолчанию.")
+    
+    # Создаем папку проекта
+    project_dir = Path(__file__).parent
+    project_dir.mkdir(exist_ok=True)
+    
+    return {
+        "folders": {
+            "normative": str(project_dir / "NORMATIVE"),
+            "methodology": str(project_dir / "METHODOLOGY"),
+            "structured": str(project_dir / "STRUCTURED"),
+            "expertise": str(project_dir / "EXPERTISE")
+        },
+        "database_path": str(project_dir / "knowledge_database.db"),
+        "templates_path": str(project_dir / "templates.json"),
+        "expert_sessions_path": str(project_dir / "expert_sessions")
+    }
+
+def save_config(config):
+    """
+    Сохраняет конфигурацию в JSON файл.
+    """
+    try:
+        config_path = Path(__file__).parent / "config.json"
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        print(f"✅ Конфигурация сохранена в {config_path}")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка сохранения конфигурации: {e}")
+        return False
+
+def validate_folders(folders_config):
+    """
+    Проверяет существование папок из конфигурации.
+    """
+    missing = []
+    existing = []
+    
+    for folder_type, folder_path in folders_config.items():
+        if not folder_path or folder_path.strip() == "":
+            missing.append((folder_type, "(пустой путь)"))
+            continue
+            
+        path = Path(folder_path)
+        if path.exists() and path.is_dir():
+            existing.append((folder_type, folder_path))
+        else:
+            missing.append((folder_type, folder_path))
+    
+    return {
+        "all_exist": len(missing) == 0,
+        "existing": existing,
+        "missing": missing
+    }
+
+def create_default_folders(folders_config):
+    """
+    Создает папки по умолчанию если они не существуют.
+    """
+    created = []
+    for folder_type, folder_path in folders_config.items():
+        if folder_path:
+            path = Path(folder_path)
+            if not path.exists():
+                try:
+                    path.mkdir(parents=True, exist_ok=True)
+                    created.append((folder_type, folder_path))
+                except Exception as e:
+                    print(f"❌ Не удалось создать папку {folder_path}: {e}")
+    return created
+
+# Загружаем конфигурацию
+CONFIG = load_config()
+
+# Создаем необходимые папки по умолчанию (если используются пути по умолчанию)
+if not Path(CONFIG["folders"]["normative"]).exists():
+    created = create_default_folders(CONFIG["folders"])
+    if created:
+        print(f"📁 Созданы папки по умолчанию:")
+        for folder_type, path in created:
+            print(f"   - {folder_type}: {path}")
+
+# Проверяем доступность папок
+folder_status = validate_folders(CONFIG["folders"])
+if not folder_status["all_exist"]:
+    print("⚠ Предупреждение: некоторые папки недоступны:")
+    for folder_type, path in folder_status["missing"]:
+        print(f"   - {folder_type}: {path}")
+    print("ℹ️ Проверьте пути в файле config.json")
+
+# Создаем папку для сессий эксперта
+expert_sessions_path = Path(CONFIG.get("expert_sessions_path", "./expert_sessions"))
+expert_sessions_path.mkdir(exist_ok=True, parents=True)
 
 # ==============================================
 # СИСТЕМА УПРАВЛЕНИЯ ШАБЛОНАМИ ВОПРОСОВ
@@ -1467,7 +1577,7 @@ with tab1:
                         selected_sections = db.get_selected_sections()
                         
                         with st.spinner("Создаю файлы..."):
-                            output_dir = Path("./expert_sessions")
+                            output_dir = Path(CONFIG.get("expert_sessions_path", "./expert_sessions"))
                             output_dir.mkdir(exist_ok=True, parents=True)
                             
                             session_dir = ExpertFileGenerator.create_prompt_file(
@@ -1655,20 +1765,73 @@ with tab2:
 with tab3:
     st.subheader("⚙️ НАСТРОЙКИ")
     
-    st.markdown("### 📂 ПУТИ К ПАПКАМ")
+    st.markdown("### 📂 КОНФИГУРАЦИЯ ПУТЕЙ")
     
+    # Отображаем текущую конфигурацию
     for folder_name, folder_path in CONFIG["folders"].items():
+        display_name = {
+            "normative": "📖 Нормативные акты",
+            "methodology": "📚 Методические материалы",
+            "structured": "🗂️ Структурированные документы",
+            "expertise": "👨‍⚖️ Экспертные заключения"
+        }.get(folder_name, folder_name)
+        
         st.text_input(
-            f"Папка {folder_name}:",
+            f"{display_name}:",
             value=folder_path,
-            key=f"path_{folder_name}",
+            key=f"config_path_{folder_name}",
             disabled=True
         )
     
     st.markdown("---")
     
-    if st.button("🔄 Сбросить все настройки", type="secondary"):
-        st.info("В демо-версии настройки не сохраняются")
+    # Проверка доступности папок
+    if st.button("🔍 Проверить доступность папок", type="secondary"):
+        status = validate_folders(CONFIG["folders"])
+        
+        if status["all_exist"]:
+            st.success("✅ Все папки доступны!")
+        else:
+            st.error("❌ Некоторые папки недоступны:")
+            for folder_type, path in status["missing"]:
+                st.error(f"   - {folder_type}: {path}")
+            
+            st.info("ℹ️ Отредактируйте файл `config.json` и перезапустите приложение")
+    
+    st.markdown("---")
+    st.markdown("### 📝 РЕДАКТИРОВАНИЕ КОНФИГУРАЦИИ")
+    
+    # Показываем текущий config.json
+    config_path = Path(__file__).parent / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config_content = f.read()
+            
+            st.download_button(
+                label="⬇️ Скачать текущий config.json",
+                data=config_content,
+                file_name="config.json",
+                mime="application/json",
+                use_container_width=True,
+                help="Скачайте, отредактируйте и перезапустите приложение"
+            )
+            
+            with st.expander("👁️ Показать текущий config.json"):
+                st.code(config_content, language="json")
+        
+        except Exception as e:
+            st.error(f"Ошибка чтения файла конфигурации: {e}")
+    else:
+        st.info("Файл config.json не найден. Используются настройки по умолчанию.")
+        
+        # Кнопка для создания config.json с текущими настройками
+        if st.button("📄 Создать config.json", type="primary"):
+            if save_config(CONFIG):
+                st.success("Файл config.json создан! Перезапустите приложение.")
+                add_notification("Файл конфигурации создан", "success")
+            else:
+                st.error("Не удалось создать файл конфигурации")
 
 # ==============================================
 # ВКЛАДКА 4: АДМИНИСТРИРОВАНИЕ
@@ -1888,7 +2051,7 @@ with st.sidebar:
             # Устанавливаем флаг, чтобы показать кнопки скачивания
             selected_sections = db.get_selected_sections()
             with st.spinner("Создаю файлы..."):
-                output_dir = Path("./expert_sessions")
+                output_dir = Path(CONFIG.get("expert_sessions_path", "./expert_sessions"))
                 output_dir.mkdir(exist_ok=True, parents=True)
                 session_dir = ExpertFileGenerator.create_prompt_file(
                     selected_sections, 

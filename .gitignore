@@ -1,0 +1,21 @@
+# Конфигурация с путями к документам
+config.json
+
+# Файлы базы данных
+knowledge_database.db/
+sections.json
+metadata.json
+
+# Сессии эксперта
+expert_sessions/
+
+# Временные файлы и кэши
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Файлы IDE
+.vscode/
+.idea/
+*.swp
+*.swo
