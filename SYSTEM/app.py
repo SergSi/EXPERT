@@ -10,6 +10,15 @@ from datetime import datetime
 import uuid
 import streamlit as st
 
+# Добавляем библиотеку для работы с RTF
+try:
+    import striprtf.striprtf as rtf
+    RTF_SUPPORT = True
+    print("✅ Поддержка RTF доступна")
+except ImportError:
+    RTF_SUPPORT = False
+    print("⚠ Библиотека для RTF не установлена. Файлы .rtf будут игнорироваться.")
+
 # ==============================================
 # КОНФИГУРАЦИЯ ПАПОК И ТИПОВ ДОКУМЕНТОВ
 # ==============================================
@@ -55,7 +64,8 @@ def load_config():
         },
         "database_path": str(project_dir / "knowledge_database.db"),
         "templates_path": str(project_dir / "templates.json"),
-        "expert_sessions_path": str(project_dir / "expert_sessions")
+        "expert_sessions_path": str(project_dir / "expert_sessions"),
+        "supported_extensions": [".md", ".txt", ".rtf"]
     }
 
 def save_config(config):
@@ -115,6 +125,9 @@ def create_default_folders(folders_config):
 # Загружаем конфигурацию
 CONFIG = load_config()
 
+# Получаем список поддерживаемых расширений
+SUPPORTED_EXTENSIONS = CONFIG.get("supported_extensions", [".md", ".txt", ".rtf"])
+
 # Создаем необходимые папки по умолчанию (если используются пути по умолчанию)
 if not Path(CONFIG["folders"]["normative"]).exists():
     created = create_default_folders(CONFIG["folders"])
@@ -134,6 +147,141 @@ if not folder_status["all_exist"]:
 # Создаем папку для сессий эксперта
 expert_sessions_path = Path(CONFIG.get("expert_sessions_path", "./expert_sessions"))
 expert_sessions_path.mkdir(exist_ok=True, parents=True)
+
+# ==============================================
+# КЛАСС ДЛЯ РАБОТЫ С РАЗНЫМИ ФОРМАТАМИ ФАЙЛОВ
+# ==============================================
+
+class FileFormatReader:
+    """Класс для чтения файлов разных форматов"""
+    
+    @staticmethod
+    def read_file(file_path: Path) -> Optional[str]:
+        """
+        Читает файл любого поддерживаемого формата.
+        Возвращает текст или None в случае ошибки.
+        """
+        if not file_path.exists():
+            return None
+        
+        extension = file_path.suffix.lower()
+        
+        try:
+            if extension == '.rtf':
+                return FileFormatReader._read_rtf(file_path)
+            elif extension in ['.md', '.txt']:
+                return FileFormatReader._read_text(file_path)
+            else:
+                print(f"⚠ Неподдерживаемый формат файла: {extension}")
+                return None
+        except Exception as e:
+            print(f"❌ Ошибка чтения файла {file_path}: {e}")
+            return None
+    
+    @staticmethod
+    def _read_rtf(file_path: Path) -> Optional[str]:
+        """Читает RTF файл и конвертирует в обычный текст"""
+        if not RTF_SUPPORT:
+            print(f"⚠ RTF поддержка не установлена для файла {file_path}")
+            return None
+        
+        try:
+            # Читаем как бинарный файл
+            with open(file_path, 'rb') as f:
+                raw_data = f.read()
+            
+            if not raw_data:
+                return ""
+            
+            # Пробуем определить кодировку
+            encoding_result = chardet.detect(raw_data)
+            encoding = encoding_result['encoding']
+            
+            # Пробуем разные кодировки
+            encodings_to_try = ['utf-8', 'cp1251', 'cp1252', 'iso-8859-1', 'windows-1251']
+            if encoding and encoding not in encodings_to_try:
+                encodings_to_try.insert(0, encoding)
+            
+            rtf_content = None
+            for enc in encodings_to_try:
+                try:
+                    rtf_content = raw_data.decode(enc, errors='strict')
+                    break
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            
+            if rtf_content is None:
+                # Последняя попытка с игнорированием ошибок
+                try:
+                    rtf_content = raw_data.decode('utf-8', errors='ignore')
+                except:
+                    rtf_content = raw_data.decode('latin-1', errors='ignore')
+            
+            # Конвертируем RTF в обычный текст
+            try:
+                plain_text = rtf.rtf_to_text(rtf_content)
+                return plain_text
+            except Exception as rtf_error:
+                print(f"⚠ Ошибка конвертации RTF {file_path}: {rtf_error}")
+                # Если не удалось сконвертировать, возвращаем как есть
+                return rtf_content
+        
+        except Exception as e:
+            print(f"❌ Ошибка чтения RTF файла {file_path}: {e}")
+            return None
+    
+    @staticmethod
+    def _read_text(file_path: Path) -> Optional[str]:
+        """Читает текстовые файлы (TXT, MD) с определением кодировки"""
+        try:
+            with open(file_path, 'rb') as f:
+                raw_data = f.read()
+            
+            if not raw_data:
+                return ""
+            
+            encoding_result = chardet.detect(raw_data)
+            encoding = encoding_result['encoding']
+            confidence = encoding_result['confidence']
+            
+            if not encoding or confidence < 0.7:
+                encodings_to_try = ['utf-8', 'utf-16-le', 'utf-16-be', 'cp1251', 'iso-8859-1']
+            else:
+                encodings_to_try = [encoding, 'utf-8', 'utf-16-le', 'utf-16-be']
+            
+            for enc in encodings_to_try:
+                try:
+                    if enc.startswith('utf-16'):
+                        if len(raw_data) >= 2:
+                            bom = raw_data[:2]
+                            if bom == b'\xff\xfe':
+                                content = raw_data[2:].decode('utf-16-le')
+                                return content
+                            elif bom == b'\xfe\xff':
+                                content = raw_data[2:].decode('utf-16-be')
+                                return content
+                            else:
+                                try:
+                                    content = raw_data.decode('utf-16-le')
+                                    return content
+                                except:
+                                    content = raw_data.decode('utf-16-be')
+                                    return content
+                    
+                    content = raw_data.decode(enc, errors='strict')
+                    return content
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            
+            # Последняя попытка
+            try:
+                return raw_data.decode('utf-8', errors='ignore')
+            except:
+                return raw_data.decode('latin-1', errors='ignore')
+                
+        except Exception as e:
+            print(f"❌ Ошибка чтения текстового файла {file_path}: {e}")
+            return None
 
 # ==============================================
 # СИСТЕМА УПРАВЛЕНИЯ ШАБЛОНАМИ ВОПРОСОВ
@@ -277,10 +425,46 @@ class SimpleSectionDatabase:
         self.db_path = Path(CONFIG["database_path"])
         self.sections_db = self.db_path / "sections.json"
         self.metadata_db = self.db_path / "metadata.json"
+        self.file_reader = FileFormatReader()  # Добавляем ридер файлов
         
         # Загружаем существующую базу или создаем новую
         self.sections = self._load_sections()
         self.metadata = self._load_metadata()
+    
+    def _load_sections(self) -> List[Dict]:
+        """Загружаем базу разделов"""
+        if self.sections_db.exists():
+            try:
+                with open(self.sections_db, 'r', encoding='utf-8') as f:
+                    sections = json.load(f)
+                    print(f"✅ База разделов загружена из {self.sections_db}")
+                    return sections
+            except Exception as e:
+                print(f"❌ Ошибка загрузки базы разделов: {e}")
+                return []
+        print("📁 База разделов не найдена, создается новая")
+        return []
+    
+    def _load_metadata(self) -> Dict:
+        """Загружаем метаданные базы"""
+        if self.metadata_db.exists():
+            try:
+                with open(self.metadata_db, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                    print(f"✅ Метаданные базы загружены из {self.metadata_db}")
+                    return metadata
+            except Exception as e:
+                print(f"❌ Ошибка загрузки метаданных: {e}")
+                return {}
+        print("📁 Метаданные базы не найдены, создаются новые")
+        return {
+            "created_at": "",
+            "last_updated": "",
+            "total_sections": 0,
+            "total_documents": 0,
+            "by_folder": {},
+            "supported_extensions": SUPPORTED_EXTENSIONS
+        }
     
     def _clean_text_from_comments(self, text: str) -> str:
         """Очищает текст от различных комментариев и служебной информации"""
@@ -347,42 +531,40 @@ class SimpleSectionDatabase:
         
         return cleaned
     
-    def _load_sections(self) -> List[Dict]:
-        """Загружаем базу разделов"""
-        if self.sections_db.exists():
-            try:
-                with open(self.sections_db, 'r', encoding='utf-8') as f:
-                    sections = json.load(f)
-                    return sections
-            except:
-                return []
-        return []
-    
-    def _load_metadata(self) -> Dict:
-        """Загружаем метаданные базы"""
-        if self.metadata_db.exists():
-            try:
-                with open(self.metadata_db, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except:
-                return {}
-        return {
-            "created_at": "",
-            "last_updated": "",
-            "total_sections": 0,
-            "total_documents": 0,
-            "by_folder": {}
-        }
+    def _extract_yaml_metadata(self, content: str) -> Dict:
+        """Извлекает метаданные из YAML заголовка в начале документа"""
+        metadata = {}
+        
+        try:
+            content_stripped = content.strip()
+            if content_stripped.startswith('---'):
+                parts = content_stripped.split('---', 2)
+                if len(parts) >= 3:
+                    yaml_content = parts[1].strip()
+                    if yaml_content:
+                        metadata = yaml.safe_load(yaml_content) or {}
+        except (yaml.YAMLError, AttributeError) as e:
+            print(f"  ⚠ Не удалось прочитать YAML: {e}")
+        
+        if not isinstance(metadata, dict):
+            metadata = {}
+        
+        return metadata
     
     def save_database(self):
         """Сохраняем базу на диск"""
-        self.db_path.mkdir(exist_ok=True)
-        
-        with open(self.sections_db, 'w', encoding='utf-8') as f:
-            json.dump(self.sections, f, ensure_ascii=False, indent=2)
-        
-        with open(self.metadata_db, 'w', encoding='utf-8') as f:
-            json.dump(self.metadata, f, ensure_ascii=False, indent=2)
+        try:
+            self.db_path.mkdir(exist_ok=True, parents=True)
+            
+            with open(self.sections_db, 'w', encoding='utf-8') as f:
+                json.dump(self.sections, f, ensure_ascii=False, indent=2)
+            
+            with open(self.metadata_db, 'w', encoding='utf-8') as f:
+                json.dump(self.metadata, f, ensure_ascii=False, indent=2)
+            
+            print(f"💾 База данных сохранена в {self.db_path}")
+        except Exception as e:
+            print(f"❌ Ошибка сохранения базы данных: {e}")
     
     def scan_and_build_database(self):
         """Сканируем папки и строим базу разделов"""
@@ -399,18 +581,20 @@ class SimpleSectionDatabase:
             folder = Path(folder_path)
             print(f"\n📁 Сканируем: {folder} ({folder_name})")
             
-            # Ищем файлы
-            files = list(folder.rglob("*.md")) + list(folder.rglob("*.txt"))
+            # Ищем файлы ВСЕХ поддерживаемых форматов
+            files = []
+            for ext in SUPPORTED_EXTENSIONS:
+                files.extend(list(folder.rglob(f"*{ext}")))
             
             folder_sections = 0
             folder_documents = len(files)
             
             for file_path in files:
-                print(f"  📄 {file_path.name}...", end="")
+                print(f"  📄 {file_path.name} ({file_path.suffix})...", end="")
                 
                 try:
-                    # Читаем файл с определением кодировки
-                    content = self._read_file_with_encoding(file_path)
+                    # Используем универсальный ридер файлов
+                    content = self.file_reader.read_file(file_path)
                     
                     if content is None:
                         print(f" ❌ Не удалось прочитать файл")
@@ -446,6 +630,7 @@ class SimpleSectionDatabase:
                             "id": f"{file_path.stem}_{i}_{uuid.uuid4().hex[:8]}",
                             "folder": folder_name,
                             "document": file_path.name,
+                            "document_extension": file_path.suffix,
                             "document_title": document_title,
                             "document_path": str(file_path),
                             "title": section.get("title", document_title),
@@ -475,7 +660,8 @@ class SimpleSectionDatabase:
             "last_updated": datetime.now().isoformat(),
             "total_sections": len(all_sections),
             "total_documents": sum(stats["documents"] for stats in folder_stats.values()),
-            "by_folder": folder_stats
+            "by_folder": folder_stats,
+            "supported_extensions": SUPPORTED_EXTENSIONS
         }
         
         # Сохраняем
@@ -485,81 +671,20 @@ class SimpleSectionDatabase:
         print(f"   Всего документов: {self.metadata['total_documents']}")
         print(f"   Всего разделов: {self.metadata['total_sections']}")
         
+        # Статистика по форматам
+        format_stats = {}
+        for section in all_sections:
+            ext = section.get("document_extension", ".txt").lower()
+            format_stats[ext] = format_stats.get(ext, 0) + 1
+        
+        print(f"   Форматы документов:")
+        for ext, count in format_stats.items():
+            print(f"     {ext}: {count} документов")
+        
         for folder_name, stats in folder_stats.items():
             print(f"   📁 {folder_name}: {stats['documents']} док. → {stats['sections']} разд.")
         
         return all_sections
-    
-    def _read_file_with_encoding(self, file_path: Path) -> Optional[str]:
-        """Читает файл с автоматическим определением кодировки"""
-        try:
-            with open(file_path, 'rb') as f:
-                raw_data = f.read()
-            
-            if not raw_data:
-                return ""
-            
-            encoding_result = chardet.detect(raw_data)
-            encoding = encoding_result['encoding']
-            confidence = encoding_result['confidence']
-            
-            if not encoding or confidence < 0.7:
-                encodings_to_try = ['utf-8', 'utf-16-le', 'utf-16-be', 'cp1251', 'iso-8859-1']
-            else:
-                encodings_to_try = [encoding, 'utf-8', 'utf-16-le', 'utf-16-be']
-            
-            for enc in encodings_to_try:
-                try:
-                    if enc.startswith('utf-16'):
-                        if len(raw_data) >= 2:
-                            bom = raw_data[:2]
-                            if bom == b'\xff\xfe':
-                                content = raw_data[2:].decode('utf-16-le')
-                                return content
-                            elif bom == b'\xfe\xff':
-                                content = raw_data[2:].decode('utf-16-be')
-                                return content
-                            else:
-                                try:
-                                    content = raw_data.decode('utf-16-le')
-                                    return content
-                                except:
-                                    content = raw_data.decode('utf-16-be')
-                                    return content
-                    
-                    content = raw_data.decode(enc, errors='strict')
-                    return content
-                except (UnicodeDecodeError, LookupError):
-                    continue
-            
-            try:
-                return raw_data.decode('utf-8', errors='ignore')
-            except:
-                return raw_data.decode('latin-1', errors='ignore')
-                
-        except Exception as e:
-            print(f"  ⚠ Ошибка чтения файла {file_path.name}: {e}")
-            return None
-    
-    def _extract_yaml_metadata(self, content: str) -> Dict:
-        """Извлекает метаданные из YAML заголовка в начале документа"""
-        metadata = {}
-        
-        try:
-            content_stripped = content.strip()
-            if content_stripped.startswith('---'):
-                parts = content_stripped.split('---', 2)
-                if len(parts) >= 3:
-                    yaml_content = parts[1].strip()
-                    if yaml_content:
-                        metadata = yaml.safe_load(yaml_content) or {}
-        except (yaml.YAMLError, AttributeError) as e:
-            print(f"  ⚠ Не удалось прочитать YAML: {e}")
-        
-        if not isinstance(metadata, dict):
-            metadata = {}
-        
-        return metadata
     
     def _split_document_by_type(self, content: str, file_path: Path, folder_type: str, doc_title: str) -> List[Dict]:
         """Разбиваем документ на разделы в зависимости от типа папки"""
@@ -804,13 +929,14 @@ class SimpleSectionDatabase:
         }]
     
     def get_sections_for_display(self) -> List[Dict]:
-        """Возвращает разделы для отображения с удобной структурой"""
+        """Возвращает разделы для отображения с удобной структуряой"""
         display_data = []
         
         for section in self.sections:
             section_id = section.get("id", str(uuid.uuid4()))
             folder = section.get("folder", "unknown")
             doc_file = section.get("document", "")
+            doc_ext = section.get("document_extension", ".txt")
             doc_title = section.get("document_title", doc_file)
             section_title = section.get("title", doc_title)
             section_type = section.get("section_type", "text")
@@ -827,12 +953,20 @@ class SimpleSectionDatabase:
                 short_section_title = f"[{short_section_title}]"
                 section_title = f"[{section_title}]"
             
+            # Добавляем иконку формата
+            format_icon = {
+                ".md": "📝",
+                ".txt": "📄",
+                ".rtf": "📋"
+            }.get(doc_ext.lower(), "📎")
+            
             display_data.append({
                 "id": section_id,
                 "folder": folder,
-                "document": short_doc_title,
+                "document": f"{format_icon} {short_doc_title}",
                 "document_full": doc_title,
                 "file": doc_file,
+                "extension": doc_ext,
                 "section": short_section_title,
                 "section_full": section_title,
                 "type": section_type,
@@ -957,6 +1091,7 @@ class ExpertFileGenerator:
                         f.write(f"### {section_title}\n")
                         f.write(f"*Название документа:* {section.get('document_title', section.get('document', 'Без названия'))}\n")
                         f.write(f"*Файл:* {section.get('document', '')}\n")
+                        f.write(f"*Формат:* {section.get('document_extension', '.txt')}\n")
                         f.write(f"*Тип раздела:* {section.get('section_type', 'text')}\n")
                         f.write(f"*Количество слов:* {section.get('word_count', 0)}\n")
                         
@@ -1020,6 +1155,7 @@ class ExpertFileGenerator:
                         "id": section.get("id"),
                         "folder": section.get("folder"),
                         "document": section.get("document"),
+                        "document_extension": section.get("document_extension"),
                         "document_title": section.get("document_title"),
                         "title": title,
                         "content": section.get("content"),
@@ -1087,12 +1223,13 @@ class ExpertFileGenerator:
                 
             doc_title = section.get("document_title", section.get("document", "Без названия"))
             doc_file = section.get("document", "")
+            doc_ext = section.get("document_extension", ".txt")
             section_type = section.get("section_type", "text")
             
             prompt += f"\n{'='*60}\n"
             prompt += f"МАТЕРИАЛ {i}: {section_title}\n"
             prompt += f"Тип: {folder_name} | Документ: {doc_title}\n"
-            prompt += f"Файл: {doc_file} | Тип раздела: {section_type}\n"
+            prompt += f"Файл: {doc_file} | Формат: {doc_ext} | Тип раздела: {section_type}\n"
             
             metadata = section.get('metadata', {})
             if metadata and isinstance(metadata, dict):
@@ -1153,6 +1290,22 @@ class ExpertFileGenerator:
                 words = sum(s.get("word_count", 0) for s in folder_sections)
                 report += f"• {name}: {len(folder_sections)} разделов ({words} слов)\n"
         
+        # Статистика по форматам
+        format_stats = {}
+        for section in sections:
+            ext = section.get("document_extension", ".txt").lower()
+            format_stats[ext] = format_stats.get(ext, 0) + 1
+        
+        if format_stats:
+            report += f"\nРАСПРЕДЕЛЕНИЕ ПО ФОРМАТАМ:\n"
+            for ext, count in format_stats.items():
+                format_name = {
+                    ".md": "Markdown",
+                    ".txt": "Текстовый",
+                    ".rtf": "RTF"
+                }.get(ext, ext)
+                report += f"• {format_name}: {count} документов\n"
+        
         report += f"\nСПИСОК ВЫБРАННЫХ РАЗДЕЛОВ:\n"
         for i, section in enumerate(sections, 1):
             folder = section.get("folder", "unknown")
@@ -1163,6 +1316,14 @@ class ExpertFileGenerator:
                 "expertise": "👨‍⚖️"
             }.get(folder, "📄")
             
+            # Иконка формата
+            doc_ext = section.get("document_extension", ".txt")
+            format_icon = {
+                ".md": "📝",
+                ".txt": "📄",
+                ".rtf": "📋"
+            }.get(doc_ext.lower(), "📎")
+            
             section_title = section.get("title", "Без названия")
             # Для структурированных документов добавляем скобки в заголовок
             if folder == "structured" and not section_title.startswith("["):
@@ -1171,8 +1332,8 @@ class ExpertFileGenerator:
             doc_title = section.get("document_title", section.get("document", "Без названия"))
             word_count = section.get("word_count", 0)
             
-            report += f"{i}. {folder_icon} {section_title} ({word_count} слов)\n"
-            report += f"   Документ: {doc_title}\n"
+            report += f"{i}. {folder_icon}{format_icon} {section_title} ({word_count} слов)\n"
+            report += f"   Документ: {doc_title} ({doc_ext})\n"
         
         report += f"\nФАЙЛЫ СЕССИИ:\n"
         report += f"1. all_sections.md - все выбранные разделы\n"
@@ -1528,6 +1689,7 @@ with tab1:
                         # Метаданные в одной строке
                         meta_info = []
                         meta_info.append(f"Тип: {item['type']}")
+                        meta_info.append(f"Формат: {item.get('extension', '.txt')}")
                         meta_info.append(f"Слов: {item['words']}")
                         if item["selected"]:
                             meta_info.append("✅ Выбрано")
@@ -1865,7 +2027,8 @@ with tab4:
                     "last_updated": datetime.now().isoformat(),
                     "total_sections": 0,
                     "total_documents": 0,
-                    "by_folder": {}
+                    "by_folder": {},
+                    "supported_extensions": SUPPORTED_EXTENSIONS
                 }
                 db.save_database()
                 st.success("База очищена!")
