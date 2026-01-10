@@ -163,7 +163,6 @@ streamlit run app.py --server.port 8501 --server.address 0.0.0.0
 project/
 ├── app.py                    # Основное приложение
 ├── config.json              # Конфигурация путей (не включать в git!)
-├── .gitignore              # Исключения для git (включает config.json)
 ├── requirements.txt        # Зависимости Python (опционально)
 ├── templates.json         # Шаблоны для ИИ (создается автоматически)
 ├── knowledge_database.db/  # База данных (создается автоматически)
