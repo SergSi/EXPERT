@@ -1,0 +1,12 @@
+{
+  "folders": {
+    "normative": "D:\\YandexDisk\\WORK\\EXPERT\\BD\\NORMATIVE",
+    "methodology": "D:\\YandexDisk\\WORK\\EXPERT\\BD\\METHODOLOGY",
+    "structured": "D:\\YandexDisk\\WORK\\EXPERT\\BD\\STRUCTURED",
+    "expertise": "D:\\YandexDisk\\WORK\\EXPERT\\BD\\EXPERTISE"
+  },
+  "database_path": "./knowledge_database.db",
+  "templates_path": "./templates.json",
+  "expert_sessions_path": "./expert_sessions",
+  "supported_extensions": [".md", ".txt", ".rtf"]
+}
