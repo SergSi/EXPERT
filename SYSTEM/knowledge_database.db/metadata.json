@@ -1,24 +1,24 @@
 {
   "created_at": "",
-  "last_updated": "2026-01-10T22:54:13.479127",
-  "total_sections": 85,
-  "total_documents": 8,
+  "last_updated": "2026-01-12T10:37:27.955052",
+  "total_sections": 103,
+  "total_documents": 11,
   "by_folder": {
     "normative": {
-      "documents": 4,
-      "sections": 65
+      "documents": 7,
+      "sections": 81
     },
     "methodology": {
       "documents": 2,
-      "sections": 10
+      "sections": 11
     },
     "structured": {
-      "documents": 1,
-      "sections": 9
+      "documents": 2,
+      "sections": 11
     },
     "expertise": {
-      "documents": 1,
-      "sections": 1
+      "documents": 0,
+      "sections": 0
     }
   },
   "supported_extensions": [
