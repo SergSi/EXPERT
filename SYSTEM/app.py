@@ -433,6 +433,9 @@ class SimpleSectionDatabase:
         self.metadata_db = self.db_path / "metadata.json"
         self.file_reader = FileFormatReader()  # Добавляем ридер файлов
         
+        # Создаем папку для базы данных если не существует
+        self.db_path.mkdir(exist_ok=True, parents=True)
+        
         # Загружаем существующую базу или создаем новую
         self.sections = self._load_sections()
         self.metadata = self._load_metadata()
@@ -445,11 +448,16 @@ class SimpleSectionDatabase:
                     sections = json.load(f)
                     print(f"✅ База разделов загружена из {self.sections_db}")
                     return sections
+            except json.JSONDecodeError as e:
+                print(f"❌ Ошибка JSON в файле разделов: {e}")
+                print(f"   Строка: {e.lineno}, позиция: {e.pos}")
+                return []
             except Exception as e:
                 print(f"❌ Ошибка загрузки базы разделов: {e}")
                 return []
-        print("📁 База разделов не найдена, создается новая")
-        return []
+        else:
+            print("📁 База разделов не найдена, создается новая")
+            return []
     
     def _load_metadata(self) -> Dict:
         """Загружаем метаданные базы"""
@@ -459,17 +467,28 @@ class SimpleSectionDatabase:
                     metadata = json.load(f)
                     print(f"✅ Метаданные базы загружены из {self.metadata_db}")
                     return metadata
+            except json.JSONDecodeError as e:
+                print(f"❌ Ошибка JSON в файле метаданных: {e}")
+                print(f"   Создаю новые метаданные...")
+                return self._create_default_metadata()
             except Exception as e:
                 print(f"❌ Ошибка загрузки метаданных: {e}")
-                return {}
-        print("📁 Метаданные базы не найдены, создаются новые")
+                return self._create_default_metadata()
+        else:
+            print("📁 Метаданные базы не найдены, создаются новые")
+            return self._create_default_metadata()
+    
+    def _create_default_metadata(self) -> Dict:
+        """Создает метаданные по умолчанию"""
         return {
-            "created_at": "",
-            "last_updated": "",
+            "created_at": datetime.now().isoformat(),
+            "last_updated": datetime.now().isoformat(),
             "total_sections": 0,
             "total_documents": 0,
             "by_folder": {},
-            "supported_extensions": SUPPORTED_EXTENSIONS
+            "format_stats": {},
+            "supported_extensions": SUPPORTED_EXTENSIONS,
+            "version": "1.0"
         }
     
     def _clean_text_from_comments(self, text: str) -> str:
@@ -562,15 +581,90 @@ class SimpleSectionDatabase:
         try:
             self.db_path.mkdir(exist_ok=True, parents=True)
             
+            # Сохраняем разделы
             with open(self.sections_db, 'w', encoding='utf-8') as f:
                 json.dump(self.sections, f, ensure_ascii=False, indent=2)
             
+            # Сохраняем метаданные
             with open(self.metadata_db, 'w', encoding='utf-8') as f:
                 json.dump(self.metadata, f, ensure_ascii=False, indent=2)
             
             print(f"💾 База данных сохранена в {self.db_path}")
+            return True
         except Exception as e:
             print(f"❌ Ошибка сохранения базы данных: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _recalculate_metadata(self, sections: List[Dict]) -> Dict:
+        """Пересчитывает метаданные на основе списка разделов"""
+        if not sections:
+            return self._create_default_metadata()
+        
+        # Подсчет уникальных документов
+        unique_documents = set()
+        folder_stats = {}
+        format_stats = {}
+        
+        for section in sections:
+            # Подсчет уникальных документов
+            doc_path = section.get("document_path", "")
+            doc_name = section.get("document", "")
+            if doc_path or doc_name:
+                doc_key = f"{doc_path}_{doc_name}"
+                unique_documents.add(doc_key)
+            
+            # Статистика по папкам
+            folder = section.get("folder", "unknown")
+            if folder not in folder_stats:
+                folder_stats[folder] = {
+                    "documents": set(),
+                    "sections": 0,
+                    "words": 0,
+                    "formats": {}
+                }
+            
+            # Добавляем документ в статистику папки
+            if doc_path or doc_name:
+                folder_stats[folder]["documents"].add(doc_key)
+            
+            # Подсчет разделов и слов
+            folder_stats[folder]["sections"] += 1
+            folder_stats[folder]["words"] += section.get("word_count", 0)
+            
+            # Статистика по форматам внутри папки
+            ext = section.get("document_extension", ".txt").lower()
+            if ext not in folder_stats[folder]["formats"]:
+                folder_stats[folder]["formats"][ext] = 0
+            folder_stats[folder]["formats"][ext] += 1
+            
+            # Общая статистика по форматам
+            format_stats[ext] = format_stats.get(ext, 0) + 1
+        
+        # Преобразуем статистику по папкам в нужный формат
+        by_folder_formatted = {}
+        for folder, stats in folder_stats.items():
+            by_folder_formatted[folder] = {
+                "documents": len(stats["documents"]),
+                "sections": stats["sections"],
+                "words": stats["words"],
+                "formats": stats["formats"]
+            }
+        
+        # Получаем created_at из существующих метаданных или используем текущее время
+        created_at = self.metadata.get("created_at", datetime.now().isoformat())
+        
+        return {
+            "created_at": created_at,
+            "last_updated": datetime.now().isoformat(),
+            "total_sections": len(sections),
+            "total_documents": len(unique_documents),
+            "by_folder": by_folder_formatted,
+            "format_stats": format_stats,
+            "supported_extensions": SUPPORTED_EXTENSIONS,
+            "version": "1.0"
+        }
     
     def scan_and_build_database(self):
         """Сканируем папки и строим базу разделов"""
@@ -644,7 +738,8 @@ class SimpleSectionDatabase:
                             "section_type": section.get("type", "text"),
                             "word_count": len(final_content.split()),
                             "metadata": metadata,
-                            "selected": False
+                            "selected": False,
+                            "scan_date": datetime.now().isoformat()
                         })
                         
                 except Exception as e:
@@ -660,35 +755,40 @@ class SimpleSectionDatabase:
         # Обновляем базу
         self.sections = all_sections
         
-        # Обновляем метаданные
-        self.metadata = {
-            "created_at": self.metadata.get("created_at", datetime.now().isoformat()),
-            "last_updated": datetime.now().isoformat(),
-            "total_sections": len(all_sections),
-            "total_documents": sum(stats["documents"] for stats in folder_stats.values()),
-            "by_folder": folder_stats,
-            "supported_extensions": SUPPORTED_EXTENSIONS
-        }
+        # ⭐ ПЕРЕСЧИТЫВАЕМ МЕТАДАННЫЕ НА ОСНОВЕ ФАКТИЧЕСКИХ ДАННЫХ ⭐
+        self.metadata = self._recalculate_metadata(all_sections)
         
         # Сохраняем
-        self.save_database()
+        success = self.save_database()
         
-        print(f"\n✅ База создана!")
-        print(f"   Всего документов: {self.metadata['total_documents']}")
-        print(f"   Всего разделов: {self.metadata['total_sections']}")
-        
-        # Статистика по форматам
-        format_stats = {}
-        for section in all_sections:
-            ext = section.get("document_extension", ".txt").lower()
-            format_stats[ext] = format_stats.get(ext, 0) + 1
-        
-        print(f"   Форматы документов:")
-        for ext, count in format_stats.items():
-            print(f"     {ext}: {count} документов")
-        
-        for folder_name, stats in folder_stats.items():
-            print(f"   📁 {folder_name}: {stats['documents']} док. → {stats['sections']} разд.")
+        if success:
+            print(f"\n✅ База создана!")
+            print(f"   Всего документов: {self.metadata['total_documents']}")
+            print(f"   Всего разделов: {self.metadata['total_sections']}")
+            print(f"   Дата обновления: {self.metadata['last_updated']}")
+            
+            # Статистика по форматам
+            if 'format_stats' in self.metadata:
+                print(f"   Форматы документов:")
+                for ext, count in self.metadata['format_stats'].items():
+                    format_name = {
+                        ".md": "Markdown",
+                        ".txt": "Текстовый",
+                        ".rtf": "RTF"
+                    }.get(ext, ext)
+                    print(f"     {format_name}: {count} документов")
+            
+            # Статистика по папкам
+            if 'by_folder' in self.metadata:
+                print(f"   Распределение по папкам:")
+                for folder_name, stats in self.metadata['by_folder'].items():
+                    folder_display = {
+                        "normative": "Нормативные",
+                        "methodology": "Методические",
+                        "structured": "Структурированные",
+                        "expertise": "Экспертные"
+                    }.get(folder_name, folder_name)
+                    print(f"     📁 {folder_display}: {stats.get('documents', 0)} док. → {stats.get('sections', 0)} разд.")
         
         return all_sections
     
@@ -935,7 +1035,7 @@ class SimpleSectionDatabase:
         }]
     
     def get_sections_for_display(self) -> List[Dict]:
-        """Возвращает разделы для отображения с удобной структуряой"""
+        """Возвращает разделы для отображения с удобной структурой"""
         display_data = []
         
         for section in self.sections:
@@ -949,6 +1049,7 @@ class SimpleSectionDatabase:
             content = section.get("content", "")
             word_count = section.get("word_count", 0)
             selected = section.get("selected", False)
+            scan_date = section.get("scan_date", "")
             
             # Сокращаем заголовок для отображения
             short_doc_title = doc_title[:40] + "..." if len(doc_title) > 40 else doc_title
@@ -966,10 +1067,19 @@ class SimpleSectionDatabase:
                 ".rtf": "📋"
             }.get(doc_ext.lower(), "📎")
             
+            # Добавляем информацию о дате сканирования если есть
+            date_info = ""
+            if scan_date:
+                try:
+                    scan_date_obj = datetime.fromisoformat(scan_date.replace('Z', '+00:00'))
+                    date_info = f" (сканировано: {scan_date_obj.strftime('%d.%m.%Y')})"
+                except:
+                    pass
+            
             display_data.append({
                 "id": section_id,
                 "folder": folder,
-                "document": f"{format_icon} {short_doc_title}",
+                "document": f"{format_icon} {short_doc_title}{date_info}",
                 "document_full": doc_title,
                 "file": doc_file,
                 "extension": doc_ext,
@@ -978,18 +1088,29 @@ class SimpleSectionDatabase:
                 "type": section_type,
                 "words": word_count,
                 "selected": selected,
-                "content_full": content
+                "content_full": content,
+                "scan_date": scan_date
             })
         
         return display_data
     
     def update_selections(self, selected_ids: List[str]):
         """Обновляет выбор эксперта"""
+        updated_count = 0
         for section in self.sections:
             section_id = section.get("id", "")
-            section["selected"] = section_id in selected_ids
+            old_selected = section.get("selected", False)
+            new_selected = section_id in selected_ids
+            
+            if old_selected != new_selected:
+                section["selected"] = new_selected
+                updated_count += 1
         
-        self.save_database()
+        if updated_count > 0:
+            self.save_database()
+            print(f"💾 Обновлено {updated_count} выборов")
+        
+        return updated_count
     
     def get_selected_sections(self) -> List[Dict]:
         """Возвращает выбранные экспертом разделы"""
@@ -997,10 +1118,225 @@ class SimpleSectionDatabase:
     
     def clear_selections(self):
         """Очищает все выборы"""
+        cleared_count = 0
         for section in self.sections:
-            section["selected"] = False
+            if section.get("selected", False):
+                section["selected"] = False
+                cleared_count += 1
         
-        self.save_database()
+        if cleared_count > 0:
+            self.save_database()
+            print(f"🗑️ Очищено {cleared_count} выборов")
+        
+        return cleared_count
+    
+    def import_database(self, import_data: Dict) -> bool:
+        """Импортирует базу данных с пересчетом метаданных"""
+        try:
+            if 'sections' not in import_data:
+                print("❌ Ошибка импорта: отсутствует ключ 'sections' в импортируемых данных")
+                return False
+            
+            # Сохраняем старые данные для возможного отката
+            old_sections = self.sections.copy()
+            old_metadata = self.metadata.copy()
+            
+            try:
+                # Импортируем разделы
+                self.sections = import_data['sections']
+                print(f"✅ Импортировано {len(self.sections)} разделов")
+                
+                # ⭐ ПЕРЕСЧИТЫВАЕМ МЕТАДАННЫЕ НА ОСНОВЕ ИМПОРТИРОВАННЫХ ДАННЫХ ⭐
+                self.metadata = self._recalculate_metadata(self.sections)
+                
+                # Если в импортируемых данных есть метаданные, сохраняем created_at
+                if 'metadata' in import_data and import_data['metadata']:
+                    imported_metadata = import_data['metadata']
+                    # Сохраняем оригинальную дату создания если она есть
+                    if 'created_at' in imported_metadata and imported_metadata['created_at']:
+                        self.metadata['created_at'] = imported_metadata['created_at']
+                
+                # Сохраняем базу
+                save_success = self.save_database()
+                
+                if save_success:
+                    print(f"✅ Метаданные пересчитаны:")
+                    print(f"   - Всего разделов: {self.metadata['total_sections']}")
+                    print(f"   - Всего документов: {self.metadata['total_documents']}")
+                    print(f"   - Последнее обновление: {self.metadata['last_updated']}")
+                    
+                    # Выводим статистику по папкам
+                    if 'by_folder' in self.metadata:
+                        for folder, stats in self.metadata['by_folder'].items():
+                            print(f"   - 📁 {folder}: {stats.get('documents', 0)} док., {stats.get('sections', 0)} разд.")
+                    
+                    return True
+                else:
+                    print("❌ Ошибка сохранения базы после импорта")
+                    return False
+                
+            except Exception as import_error:
+                # Восстанавливаем старые данные при ошибке
+                print(f"❌ Ошибка импорта: {import_error}")
+                print("🔄 Восстанавливаю предыдущие данные...")
+                self.sections = old_sections
+                self.metadata = old_metadata
+                self.save_database()
+                return False
+                
+        except Exception as e:
+            print(f"❌ Критическая ошибка импорта: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def get_database_stats(self) -> Dict:
+        """Возвращает статистику базы данных"""
+        stats = {
+            "total_sections": len(self.sections),
+            "selected_sections": sum(1 for s in self.sections if s.get("selected", False)),
+            "metadata": self.metadata.copy(),
+            "folders_summary": {},
+            "formats_summary": {}
+        }
+        
+        # Считаем статистику по папкам
+        folder_stats = {}
+        for section in self.sections:
+            folder = section.get("folder", "unknown")
+            if folder not in folder_stats:
+                folder_stats[folder] = {"sections": 0, "selected": 0, "documents": set()}
+            
+            folder_stats[folder]["sections"] += 1
+            if section.get("selected", False):
+                folder_stats[folder]["selected"] += 1
+            
+            # Добавляем документ
+            doc_key = f"{section.get('document_path', '')}_{section.get('document', '')}"
+            folder_stats[folder]["documents"].add(doc_key)
+        
+        # Преобразуем в удобный формат
+        for folder, data in folder_stats.items():
+            stats["folders_summary"][folder] = {
+                "sections": data["sections"],
+                "selected": data["selected"],
+                "documents": len(data["documents"]),
+                "selected_percentage": round((data["selected"] / data["sections"] * 100), 1) if data["sections"] > 0 else 0
+            }
+        
+        # Статистика по форматам
+        format_stats = {}
+        for section in self.sections:
+            ext = section.get("document_extension", ".txt").lower()
+            format_stats[ext] = format_stats.get(ext, 0) + 1
+        
+        stats["formats_summary"] = format_stats
+        
+        return stats
+    
+    def validate_database(self) -> Dict:
+        """Проверяет целостность базы данных"""
+        issues = []
+        warnings = []
+        
+        # Проверяем наличие обязательных полей
+        required_fields = ["id", "folder", "document", "content"]
+        for i, section in enumerate(self.sections):
+            for field in required_fields:
+                if field not in section or not section[field]:
+                    issues.append(f"Раздел #{i}: отсутствует обязательное поле '{field}'")
+            
+            # Проверяем валидность ID
+            if "id" in section and not isinstance(section["id"], str):
+                issues.append(f"Раздел #{i}: поле 'id' должно быть строкой")
+            
+            # Проверяем валидность folder
+            valid_folders = ["normative", "methodology", "structured", "expertise", "unknown"]
+            if section.get("folder") not in valid_folders:
+                warnings.append(f"Раздел #{i}: нестандартная папка '{section.get('folder')}'")
+        
+        # Проверяем уникальность ID
+        ids = [s.get("id") for s in self.sections if s.get("id")]
+        duplicates = [id for id in set(ids) if ids.count(id) > 1]
+        if duplicates:
+            issues.append(f"Найдены дублирующиеся ID: {duplicates[:3]}...")
+        
+        # Проверяем соответствие метаданных
+        actual_sections_count = len(self.sections)
+        metadata_sections_count = self.metadata.get("total_sections", 0)
+        
+        if actual_sections_count != metadata_sections_count:
+            warnings.append(f"Несоответствие: фактически разделов {actual_sections_count}, в метаданных {metadata_sections_count}")
+        
+        return {
+            "is_valid": len(issues) == 0,
+            "issues": issues,
+            "warnings": warnings,
+            "sections_count": actual_sections_count,
+            "metadata_sections_count": metadata_sections_count,
+            "has_duplicate_ids": len(duplicates) > 0
+        }
+    
+    def search_sections(self, query: str, search_in_content: bool = False) -> List[Dict]:
+        """Поиск разделов по запросу"""
+        if not query:
+            return []
+        
+        query_lower = query.lower()
+        results = []
+        
+        for section in self.sections:
+            # Поиск в заголовке документа
+            doc_title = section.get("document_title", "").lower()
+            if query_lower in doc_title:
+                results.append(section)
+                continue
+            
+            # Поиск в названии раздела
+            section_title = section.get("title", "").lower()
+            if query_lower in section_title:
+                results.append(section)
+                continue
+            
+            # Поиск в содержимом (если включено)
+            if search_in_content:
+                content = section.get("content", "").lower()
+                if query_lower in content:
+                    results.append(section)
+                    continue
+        
+        return results
+    
+    def get_sections_by_folder(self, folder_name: str) -> List[Dict]:
+        """Возвращает все разделы из указанной папки"""
+        return [s for s in self.sections if s.get("folder") == folder_name]
+    
+    def get_unique_documents(self) -> List[Dict]:
+        """Возвращает список уникальных документов"""
+        unique_docs = {}
+        
+        for section in self.sections:
+            doc_key = f"{section.get('document_path', '')}_{section.get('document', '')}"
+            if doc_key not in unique_docs:
+                unique_docs[doc_key] = {
+                    "path": section.get("document_path", ""),
+                    "name": section.get("document", ""),
+                    "title": section.get("document_title", ""),
+                    "extension": section.get("document_extension", ""),
+                    "folder": section.get("folder", ""),
+                    "sections_count": 0,
+                    "sections": []
+                }
+            
+            unique_docs[doc_key]["sections_count"] += 1
+            unique_docs[doc_key]["sections"].append({
+                "id": section.get("id"),
+                "title": section.get("title"),
+                "type": section.get("section_type"),
+                "word_count": section.get("word_count")
+            })
+        
+        return list(unique_docs.values())
 
 # ==============================================
 # ГЕНЕРАТОР ФАЙЛОВ ДЛЯ ЭКСПЕРТА
@@ -2008,144 +2344,459 @@ with tab3:
 with tab4:
     st.subheader("🛠️ АДМИНИСТРИРОВАНИЕ")
     
+    # Две колонки для разделения функционала
     col_admin1, col_admin2 = st.columns(2)
     
+    # ==============================================
+    # ЛЕВАЯ КОЛОНКА: ОПЕРАЦИИ С БАЗОЙ ДАННЫХ
+    # ==============================================
     with col_admin1:
-        # Блок операций с базой
-        st.markdown("### 🗑️ ОПЕРАЦИИ С БАЗОЙ")
+        st.markdown("### 📊 ОПЕРАЦИИ С БАЗОЙ ДАННЫХ")
         
-        # Кнопка сканирования
+        # Текущая статистика базы
+        st.markdown("##### 📈 ТЕКУЩАЯ СТАТИСТИКА:")
+        col_stat1, col_stat2 = st.columns(2)
+        with col_stat1:
+            st.metric("Всего разделов", db.metadata.get("total_sections", 0))
+        with col_stat2:
+            st.metric("Всего документов", db.metadata.get("total_documents", 0))
+        
+        # Информация о последнем обновлении
+        if db.metadata.get("last_updated"):
+            last_updated = db.metadata['last_updated']
+            if isinstance(last_updated, str) and 'T' in last_updated:
+                display_date = last_updated.split('T')[0]
+                st.caption(f"Последнее обновление: {display_date}")
+        
+        st.markdown("---")
+        
+        # Кнопка сканирования папок
         if st.button("🔍 Сканировать папки", type="primary", use_container_width=True):
-            with st.spinner("Сканирую папки..."):
-                db.scan_and_build_database()
-                st.success("✅ База данных обновлена!")
-                add_notification("База данных отсканирована и обновлена", "success")
-                st.session_state.has_unsaved_changes = False
-                st.rerun()
+            with st.spinner("Сканирую папки и обновляю базу данных..."):
+                try:
+                    db.scan_and_build_database()
+                    
+                    # Показываем детальную статистику
+                    st.success("✅ База данных успешно обновлена!")
+                    
+                    # Детальная информация
+                    with st.expander("📊 Детальная статистика после сканирования"):
+                        st.info(f"**Всего документов:** {db.metadata.get('total_documents', 0)}")
+                        st.info(f"**Всего разделов:** {db.metadata.get('total_sections', 0)}")
+                        
+                        if 'by_folder' in db.metadata:
+                            st.markdown("**Распределение по папкам:**")
+                            for folder, stats in db.metadata['by_folder'].items():
+                                folder_display = {
+                                    "normative": "📖 Нормативные",
+                                    "methodology": "📚 Методические",
+                                    "structured": "🗂️ Структурированные",
+                                    "expertise": "👨‍⚖️ Экспертные"
+                                }.get(folder, folder)
+                                st.info(f"- {folder_display}: {stats.get('documents', 0)} док., {stats.get('sections', 0)} разд.")
+                    
+                    add_notification("База данных отсканирована и обновлена", "success")
+                    st.session_state.has_unsaved_changes = False
+                    
+                    # Обновляем страницу через 2 секунды
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Ошибка при сканировании: {str(e)}")
+                    add_notification(f"Ошибка сканирования: {str(e)}", "error")
         
         # Кнопка очистки базы
-        if st.button("🗑️ Очистить базу", type="secondary", use_container_width=True):
-            st.warning("Это действие очистит всю базу данных!")
-            if st.checkbox("Я понимаю последствия"):
-                db.sections = []
-                db.metadata = {
-                    "created_at": datetime.now().isoformat(),
-                    "last_updated": datetime.now().isoformat(),
-                    "total_sections": 0,
-                    "total_documents": 0,
-                    "by_folder": {},
-                    "supported_extensions": SUPPORTED_EXTENSIONS
-                }
-                db.save_database()
-                st.success("База очищена!")
-                st.session_state.has_unsaved_changes = False
-                st.rerun()
-    
-    with col_admin2:
-        # Блок импорта/экспорта
-        st.markdown("### 📤 ИМПОРТ/ЭКСПОРТ")
+        if st.button("🗑️ Очистить базу данных", type="secondary", use_container_width=True):
+            st.warning("⚠️ **ВНИМАНИЕ:** Это действие полностью очистит базу данных!")
+            
+            # Дополнительное подтверждение
+            col_confirm1, col_confirm2 = st.columns(2)
+            with col_confirm1:
+                confirm_clear = st.checkbox("Я понимаю, что все данные будут удалены")
+            with col_confirm2:
+                if confirm_clear and st.button("✅ Подтвердить очистку", type="primary"):
+                    try:
+                        # Очищаем базу
+                        db.sections = []
+                        db.metadata = {
+                            "created_at": datetime.now().isoformat(),
+                            "last_updated": datetime.now().isoformat(),
+                            "total_sections": 0,
+                            "total_documents": 0,
+                            "by_folder": {},
+                            "supported_extensions": SUPPORTED_EXTENSIONS
+                        }
+                        db.save_database()
+                        
+                        st.success("✅ База данных очищена!")
+                        st.info("База теперь пуста. Для добавления данных используйте 'Сканировать папки'.")
+                        add_notification("База данных очищена", "warning")
+                        st.session_state.has_unsaved_changes = False
+                        
+                        # Обновляем страницу
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Ошибка при очистке базы: {str(e)}")
         
-        # Импорт
+        # Просмотр текущей структуры базы
+        st.markdown("---")
+        st.markdown("##### 👁️ ПРОСМОТР СТРУКТУРЫ БАЗЫ")
+        
+        if st.button("📋 Показать структуру базы", use_container_width=True):
+            with st.expander("📁 Структура базы данных"):
+                if db.sections:
+                    # Группируем по папкам
+                    by_folder = {}
+                    for section in db.sections:
+                        folder = section.get("folder", "unknown")
+                        if folder not in by_folder:
+                            by_folder[folder] = []
+                        by_folder[folder].append(section)
+                    
+                    for folder, sections in by_folder.items():
+                        folder_display = {
+                            "normative": "📖 Нормативные",
+                            "methodology": "📚 Методические",
+                            "structured": "🗂️ Структурированные",
+                            "expertise": "👨‍⚖️ Экспертные"
+                        }.get(folder, folder)
+                        
+                        st.markdown(f"**{folder_display}** ({len(sections)} разделов)")
+                        
+                        # Группируем по документам
+                        docs = {}
+                        for section in sections:
+                            doc_name = section.get("document_title", section.get("document", "Без названия"))
+                            if doc_name not in docs:
+                                docs[doc_name] = []
+                            docs[doc_name].append(section)
+                        
+                        for doc_name, doc_sections in list(docs.items())[:5]:  # Показываем первые 5
+                            st.caption(f"  📄 {doc_name} ({len(doc_sections)} разделов)")
+                        
+                        if len(docs) > 5:
+                            st.caption(f"  ... и ещё {len(docs) - 5} документов")
+                        st.markdown("---")
+                else:
+                    st.info("База данных пуста")
+    
+    # ==============================================
+    # ПРАВАЯ КОЛОНКА: ИМПОРТ/ЭКСПОРТ БАЗЫ
+    # ==============================================
+    with col_admin2:
+        st.markdown("### 📤 ИМПОРТ/ЭКСПОРТ БАЗЫ")
+        
+        # Секция импорта
+        st.markdown("##### 📥 ИМПОРТ БАЗЫ ИЗ ФАЙЛА")
+        
         uploaded_file = st.file_uploader(
             "Выберите файл базы (JSON):",
             type=['json'],
-            key="import_uploader"
+            key="import_uploader",
+            help="Загрузите JSON файл с экспортированной базой данных"
         )
         
         if uploaded_file is not None:
             try:
+                # Парсим файл
                 import_data = json.load(uploaded_file)
-                if st.button("📥 Импортировать данные", type="primary"):
-                    if 'sections' in import_data and 'metadata' in import_data:
-                        db.sections = import_data['sections']
-                        db.metadata = import_data['metadata']
-                        db.save_database()
-                        st.success("База успешно импортирована!")
-                        add_notification(f"База импортирована из {uploaded_file.name}", "success")
-                        st.session_state.has_unsaved_changes = False
-                        st.rerun()
-                    else:
-                        st.error("Неверный формат файла базы")
+                
+                # Показываем информацию о файле
+                with st.expander("📊 Информация о загружаемом файле", expanded=True):
+                    # Основная информация
+                    if 'sections' in import_data:
+                        sections_count = len(import_data['sections'])
+                        st.success(f"✅ Файл содержит {sections_count} разделов")
+                        
+                        # Быстрый анализ структуры
+                        if sections_count > 0:
+                            # Считаем уникальные документы
+                            unique_docs = set()
+                            for section in import_data['sections']:
+                                doc_path = section.get("document_path", "")
+                                doc_name = section.get("document", "")
+                                if doc_path or doc_name:
+                                    unique_docs.add(f"{doc_path}_{doc_name}")
+                            
+                            st.info(f"📄 Уникальных документов: {len(unique_docs)}")
+                            
+                            # Статистика по папкам
+                            folder_stats = {}
+                            for section in import_data['sections']:
+                                folder = section.get("folder", "unknown")
+                                folder_stats[folder] = folder_stats.get(folder, 0) + 1
+                            
+                            if folder_stats:
+                                st.info("📁 Распределение по папкам:")
+                                for folder, count in folder_stats.items():
+                                    folder_name = {
+                                        "normative": "Нормативные",
+                                        "methodology": "Методические",
+                                        "structured": "Структурированные",
+                                        "expertise": "Экспертные"
+                                    }.get(folder, folder)
+                                    st.caption(f"  - {folder_name}: {count} разделов")
+                    
+                    if 'metadata' in import_data:
+                        metadata = import_data['metadata']
+                        st.info("📋 Метаданные из файла:")
+                        if 'created_at' in metadata:
+                            st.caption(f"  Дата создания: {metadata['created_at'][:10]}")
+                        if 'total_sections' in metadata:
+                            st.caption(f"  Разделов в метаданных: {metadata['total_sections']}")
+                        if 'total_documents' in metadata:
+                            st.caption(f"  Документов в метаданных: {metadata['total_documents']}")
+                
+                # Кнопка импорта
+                st.markdown("---")
+                if st.button("📥 Импортировать данные с пересчетом метаданных", 
+                           type="primary", use_container_width=True):
+                    
+                    with st.spinner("Импортирую и пересчитываю метаданные..."):
+                        try:
+                            # Используем новый метод импорта с пересчетом метаданных
+                            if 'sections' not in import_data:
+                                st.error("❌ Ошибка: В файле отсутствуют данные разделов (ключ 'sections')")
+                            else:
+                                # Импортируем разделы
+                                db.sections = import_data['sections']
+                                
+                                # Пересчитываем метаданные на основе фактических данных
+                                db.metadata = db._recalculate_metadata(db.sections)
+                                
+                                # Сохраняем оригинальную дату создания если она есть в импортируемых данных
+                                if 'metadata' in import_data and import_data['metadata']:
+                                    imported_metadata = import_data['metadata']
+                                    if 'created_at' in imported_metadata and imported_metadata['created_at']:
+                                        db.metadata['created_at'] = imported_metadata['created_at']
+                                
+                                # Сохраняем базу
+                                db.save_database()
+                                
+                                # Показываем результат
+                                st.success("✅ База успешно импортирована!")
+                                
+                                # Детальная информация
+                                with st.expander("📊 Новая статистика базы", expanded=True):
+                                    st.info(f"**Всего документов:** {db.metadata['total_documents']}")
+                                    st.info(f"**Всего разделов:** {db.metadata['total_sections']}")
+                                    st.info(f"**Дата создания:** {db.metadata['created_at'][:10]}")
+                                    st.info(f"**Последнее обновление:** {db.metadata['last_updated'][:19]}")
+                                    
+                                    # Статистика по папкам
+                                    if 'by_folder' in db.metadata:
+                                        st.markdown("**Распределение по папкам:**")
+                                        total_docs = 0
+                                        total_sections = 0
+                                        
+                                        for folder, stats in db.metadata['by_folder'].items():
+                                            folder_display = {
+                                                "normative": "📖 Нормативные",
+                                                "methodology": "📚 Методические",
+                                                "structured": "🗂️ Структурированные",
+                                                "expertise": "👨‍⚖️ Экспертные"
+                                            }.get(folder, folder)
+                                            
+                                            docs_count = stats.get('documents', 0)
+                                            sections_count = stats.get('sections', 0)
+                                            
+                                            st.info(f"- {folder_display}: {docs_count} док., {sections_count} разд.")
+                                            total_docs += docs_count
+                                            total_sections += sections_count
+                                        
+                                        st.markdown(f"**Итого:** {total_docs} док., {total_sections} разд.")
+                                
+                                add_notification(f"База импортирована из {uploaded_file.name}", "success")
+                                st.session_state.has_unsaved_changes = False
+                                
+                                # Обновляем страницу
+                                st.rerun()
+                                
+                        except Exception as import_error:
+                            st.error(f"❌ Ошибка импорта: {str(import_error)}")
+                            add_notification(f"Ошибка импорта: {str(import_error)}", "error")
+                            
+            except json.JSONDecodeError as e:
+                st.error(f"❌ Ошибка формата JSON: {str(e)}")
+                st.info("Убедитесь, что файл содержит корректный JSON")
             except Exception as e:
-                st.error(f"Ошибка при чтении файла: {e}")
+                st.error(f"❌ Ошибка при чтении файла: {str(e)}")
         
-        # Экспорт
-        if st.button("📤 Экспортировать базу", type="secondary", use_container_width=True):
-            export_data = {
-                "sections": db.sections,
-                "metadata": db.metadata
-            }
-            
-            export_json = json.dumps(export_data, ensure_ascii=False, indent=2)
-            
-            st.download_button(
-                label="⬇️ Скачать базу (JSON)",
-                data=export_json,
-                file_name=f"database_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json",
-                use_container_width=True
-            )
+        # Разделитель
+        st.markdown("---")
+        
+        # Секция экспорта
+        st.markdown("##### 📤 ЭКСПОРТ ТЕКУЩЕЙ БАЗЫ")
+        
+        if st.button("📤 Экспортировать базу данных", type="secondary", use_container_width=True):
+            try:
+                # Подготавливаем данные для экспорта
+                export_data = {
+                    "sections": db.sections,
+                    "metadata": db.metadata
+                }
+                
+                # Конвертируем в JSON
+                export_json = json.dumps(export_data, ensure_ascii=False, indent=2)
+                
+                # Создаем имя файла с датой
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"database_export_{timestamp}.json"
+                
+                # Показываем информацию о экспортируемых данных
+                st.info(f"📊 Экспортируется:")
+                st.info(f"- Разделов: {len(db.sections)}")
+                st.info(f"- Документов: {db.metadata.get('total_documents', 0)}")
+                st.info(f"- Дата экспорта: {timestamp}")
+                
+                # Кнопка скачивания
+                st.download_button(
+                    label=f"⬇️ Скачать {filename}",
+                    data=export_json,
+                    file_name=filename,
+                    mime="application/json",
+                    use_container_width=True,
+                    help="Скачайте файл для резервного копирования или переноса данных"
+                )
+                
+                add_notification(f"База экспортирована в {filename}", "info")
+                
+            except Exception as e:
+                st.error(f"❌ Ошибка при экспорте: {str(e)}")
+                add_notification(f"Ошибка экспорта: {str(e)}", "error")
     
-    # Управление шаблонами
+    # ==============================================
+    # УПРАВЛЕНИЕ ШАБЛОНАМИ (нижняя часть)
+    # ==============================================
     st.markdown("---")
-    st.markdown("### 🎯 УПРАВЛЕНИЕ ШАБЛОНАМИ")
+    st.markdown("### 🎯 УПРАВЛЕНИЕ ШАБЛОНАМИ ВОПРОСОВ")
     
     col_template1, col_template2 = st.columns(2)
     
+    # ЛЕВАЯ КОЛОНКА: РЕДАКТИРОВАНИЕ ШАБЛОНОВ
     with col_template1:
-        # Просмотр и редактирование шаблонов
         st.markdown("##### 📝 РЕДАКТИРОВАТЬ ШАБЛОНЫ")
         
         templates = template_manager.get_templates_list()
         
-        for template in templates:
-            with st.expander(f"✏️ {template.get('name', 'Без названия')}", expanded=False):
-                new_name = st.text_input("Название:", 
-                                       value=template.get('name', ''),
-                                       key=f"name_{template['id']}")
-                
-                new_description = st.text_area("Описание:",
-                                             value=template.get('description', ''),
-                                             key=f"desc_{template['id']}")
-                
-                new_prompt = st.text_area("Текст шаблона:",
-                                        value=template.get('prompt', ''),
-                                        height=200,
-                                        key=f"prompt_{template['id']}")
-                
-                if st.button("💾 Сохранить изменения", key=f"save_{template['id']}"):
-                    # Обновляем шаблон
-                    template['name'] = new_name
-                    template['description'] = new_description
-                    template['prompt'] = new_prompt
+        if not templates:
+            st.info("Нет доступных шаблонов. Создайте первый шаблон.")
+        else:
+            for template in templates:
+                with st.expander(f"✏️ {template.get('name', 'Без названия')}", expanded=False):
+                    # Поля для редактирования
+                    new_name = st.text_input(
+                        "Название шаблона:", 
+                        value=template.get('name', ''),
+                        key=f"name_{template['id']}",
+                        help="Название шаблона, которое будет отображаться в списке"
+                    )
                     
-                    # Сохраняем изменения
-                    template_manager.update_templates(template_manager.templates)
-                    st.success(f"Шаблон '{new_name}' обновлен!")
-                    add_notification(f"Шаблон '{new_name}' обновлен", "success")
-                    st.rerun()
+                    new_description = st.text_area(
+                        "Описание шаблона:",
+                        value=template.get('description', ''),
+                        key=f"desc_{template['id']}",
+                        help="Краткое описание назначения шаблона",
+                        height=80
+                    )
+                    
+                    new_prompt = st.text_area(
+                        "Текст шаблона (prompt):",
+                        value=template.get('prompt', ''),
+                        height=200,
+                        key=f"prompt_{template['id']}",
+                        help="Текст, который будет отправляться ИИ вместе с материалами"
+                    )
+                    
+                    # Кнопки действий
+                    col_btn1, col_btn2 = st.columns(2)
+                    
+                    with col_btn1:
+                        if st.button("💾 Сохранить изменения", key=f"save_{template['id']}", use_container_width=True):
+                            if new_name and new_prompt:
+                                # Обновляем шаблон
+                                template['name'] = new_name
+                                template['description'] = new_description
+                                template['prompt'] = new_prompt
+                                
+                                # Сохраняем изменения
+                                template_manager.update_templates(template_manager.templates)
+                                st.success(f"✅ Шаблон '{new_name}' обновлен!")
+                                add_notification(f"Шаблон '{new_name}' обновлен", "success")
+                                st.rerun()
+                            else:
+                                st.error("❌ Название и текст шаблона не могут быть пустыми")
+                    
+                    with col_btn2:
+                        # Проверяем, не является ли это последним шаблоном
+                        if len(templates) > 1:
+                            if st.button("🗑️ Удалить шаблон", key=f"delete_{template['id']}", 
+                                       type="secondary", use_container_width=True):
+                                # Подтверждение удаления
+                                st.warning(f"Вы уверены, что хотите удалить шаблон '{template['name']}'?")
+                                if st.button(f"✅ Да, удалить '{template['name']}'", 
+                                           key=f"confirm_delete_{template['id']}"):
+                                    # Удаляем шаблон
+                                    new_templates_list = [t for t in templates if t['id'] != template['id']]
+                                    template_manager.templates["templates"] = new_templates_list
+                                    template_manager.update_templates(template_manager.templates)
+                                    
+                                    st.success(f"✅ Шаблон '{template['name']}' удален!")
+                                    add_notification(f"Шаблон '{template['name']}' удален", "warning")
+                                    st.rerun()
+                        else:
+                            st.caption("❌ Нельзя удалить последний шаблон")
     
+    # ПРАВАЯ КОЛОНКА: СОЗДАНИЕ НОВОГО ШАБЛОНА
     with col_template2:
-        # Создание нового шаблона
         st.markdown("##### ➕ СОЗДАТЬ НОВЫЙ ШАБЛОН")
         
-        with st.form("new_template_form"):
-            new_template_name = st.text_input("Название нового шаблона:", 
-                                            placeholder="Например: Технический анализ")
+        with st.form("new_template_form", clear_on_submit=True):
+            new_template_name = st.text_input(
+                "Название нового шаблона:", 
+                placeholder="Например: Технический анализ",
+                help="Придумайте понятное название для нового шаблона"
+            )
             
-            new_template_desc = st.text_area("Описание шаблона:",
-                                           placeholder="Краткое описание цели шаблона")
+            new_template_desc = st.text_area(
+                "Описание шаблона:",
+                placeholder="Краткое описание цели шаблона",
+                help="Опишите, для каких задач предназначен этот шаблон",
+                height=80
+            )
             
-            new_template_prompt = st.text_area("Текст шаблона:",
-                                             placeholder="Введите текст промта для ИИ...",
-                                             height=250)
+            new_template_prompt = st.text_area(
+                "Текст шаблона (prompt):",
+                placeholder="Введите текст промта для ИИ...",
+                height=250,
+                help="Основной текст, который будет отправляться ИИ. Можно использовать стандартные структуры ответа."
+            )
             
-            submit_btn = st.form_submit_button("➕ Создать шаблон", type="primary")
+            # Примеры промтов
+            with st.expander("💡 Примеры структуры промтов"):
+                st.markdown("""
+                **Стандартная структура:**
+                ```
+                Ты — эксперт в области [специализация]. 
+                Используй информацию ТОЛЬКО из предоставленных материалов.
+                
+                СТРУКТУРА ОТВЕТА:
+                1. Краткий ответ
+                2. Детальный анализ
+                3. Выводы
+                4. Рекомендации
+                
+                ОТВЕТ ЭКСПЕРТА:
+                ```
+                """)
+            
+            submit_btn = st.form_submit_button("➕ Создать новый шаблон", type="primary", use_container_width=True)
         
-        # Обработка формы вынесена ВНЕ формы
+        # Обработка формы (ВНЕ формы)
         if submit_btn:
             if new_template_name and new_template_prompt:
-                # Создаем новый шаблон
+                # Создаем новый шаблон с уникальным ID
                 new_template = {
                     "id": f"template_{uuid.uuid4().hex[:8]}",
                     "name": new_template_name,
@@ -2161,21 +2812,70 @@ with tab4:
                 template_manager.templates["templates"] = templates
                 template_manager.update_templates(template_manager.templates)
                 
-                st.success(f"Шаблон '{new_template_name}' создан!")
+                # Успешное сообщение
+                st.success(f"✅ Шаблон '{new_template_name}' успешно создан!")
+                st.info(f"🆔 ID шаблона: {new_template['id']}")
                 add_notification(f"Создан новый шаблон: {new_template_name}", "success")
+                
+                # Обновляем страницу
                 st.rerun()
             else:
-                st.error("Заполните название и текст шаблона")
+                st.error("❌ Заполните название и текст шаблона")
     
-    # Перезагрузка шаблонов - ВНЕ формы, отдельный блок
+    # ==============================================
+    # ДОПОЛНИТЕЛЬНЫЕ ОПЕРАЦИИ
+    # ==============================================
     st.markdown("---")
-    st.markdown("### 🔄 ПЕРЕЗАГРУЗКА ШАБЛОНОВ")
+    st.markdown("### 🔧 ДОПОЛНИТЕЛЬНЫЕ ОПЕРАЦИИ")
     
-    if st.button("🔄 Перезагрузить шаблоны из файла", type="secondary", use_container_width=True):
-        template_manager.reload_templates()
-        st.success("Шаблоны перезагружены из файла!")
-        add_notification("Шаблоны перезагружены из файла", "success")
-        st.rerun()
+    col_extra1, col_extra2 = st.columns(2)
+    
+    with col_extra1:
+        # Перезагрузка шаблонов из файла
+        st.markdown("##### 🔄 ПЕРЕЗАГРУЗКА ШАБЛОНОВ")
+        
+        if st.button("🔄 Перезагрузить шаблоны из файла", 
+                   type="secondary", use_container_width=True,
+                   help="Загружает шаблоны из файла templates.json, отменяя все несохраненные изменения"):
+            
+            with st.spinner("Перезагружаю шаблоны..."):
+                try:
+                    template_manager.reload_templates()
+                    st.success("✅ Шаблоны успешно перезагружены из файла!")
+                    
+                    # Обновляем выбранный шаблон если он больше не существует
+                    current_templates_ids = [t['id'] for t in template_manager.get_templates_list()]
+                    if st.session_state.selected_template not in current_templates_ids:
+                        default_template = template_manager.get_default_template()
+                        st.session_state.selected_template = default_template['id']
+                        st.info(f"🔄 Выбранный шаблон изменен на: {default_template['name']}")
+                    
+                    add_notification("Шаблоны перезагружены из файла", "info")
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Ошибка при перезагрузке шаблонов: {str(e)}")
+    
+    with col_extra2:
+        # Сброс всех выборов
+        st.markdown("##### 🗑️ СБРОС ВЫБОРОВ")
+        
+        selected_count = sum(1 for section in db.sections if section.get("selected", False))
+        
+        if selected_count > 0:
+            if st.button("❌ Сбросить все выборы разделов", 
+                       type="secondary", use_container_width=True,
+                       help="Отменяет все выбранные разделы во всех документах"):
+                
+                if st.checkbox("Подтвердить сброс всех выборов"):
+                    with st.spinner("Сбрасываю выборы..."):
+                        db.clear_selections()
+                        st.success(f"✅ Сброшено {selected_count} выборов разделов!")
+                        st.session_state.has_unsaved_changes = False
+                        add_notification(f"Сброшено {selected_count} выборов разделов", "info")
+                        st.rerun()
+        else:
+            st.info("Нет выбранных разделов для сброса")
 
 # ==============================================
 # САЙДБАР
