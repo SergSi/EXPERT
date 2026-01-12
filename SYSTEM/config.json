@@ -8,5 +8,5 @@
   "database_path": "./knowledge_database.db",
   "templates_path": "./templates.json",
   "expert_sessions_path": "./expert_sessions",
-  "supported_extensions": [".md", ".txt", ".rtf"]
+  "supported_extensions": [".md", ".txt"]
 }

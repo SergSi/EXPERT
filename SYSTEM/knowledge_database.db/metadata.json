@@ -23,7 +23,6 @@
   },
   "supported_extensions": [
     ".md",
-    ".txt",
-    ".rtf"
+    ".txt"
   ]
 }
