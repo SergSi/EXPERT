@@ -10,15 +10,6 @@ from datetime import datetime
 import uuid
 import streamlit as st
 
-# Добавляем библиотеку для работы с RTF
-try:
-    import striprtf.striprtf as rtf
-    RTF_SUPPORT = True
-    print("✅ Поддержка RTF доступна")
-except ImportError:
-    RTF_SUPPORT = False
-    print("⚠ Библиотека для RTF не установлена. Файлы .rtf будут игнорироваться.")
-
 # ==============================================
 # КОНФИГУРАЦИЯ ПАПОК И ТИПОВ ДОКУМЕНТОВ
 # ==============================================
@@ -65,7 +56,7 @@ def load_config():
         "database_path": str(project_dir / "knowledge_database.db"),
         "templates_path": str(project_dir / "templates.json"),
         "expert_sessions_path": str(project_dir / "expert_sessions"),
-        "supported_extensions": [".md", ".txt", ".rtf"]
+        "supported_extensions": [".md", ".txt"]  # Убрано .rtf
     }
 
 def save_config(config):
@@ -126,7 +117,7 @@ def create_default_folders(folders_config):
 CONFIG = load_config()
 
 # Получаем список поддерживаемых расширений
-SUPPORTED_EXTENSIONS = CONFIG.get("supported_extensions", [".md", ".txt", ".rtf"])
+SUPPORTED_EXTENSIONS = CONFIG.get("supported_extensions", [".md", ".txt"])
 
 # Создаем необходимые папки по умолчанию (если используются пути по умолчанию)
 if not Path(CONFIG["folders"]["normative"]).exists():
@@ -153,12 +144,12 @@ expert_sessions_path.mkdir(exist_ok=True, parents=True)
 # ==============================================
 
 class FileFormatReader:
-    """Класс для чтения файлов разных форматов"""
+    """Класс для чтения текстовых файлов"""
     
     @staticmethod
     def read_file(file_path: Path) -> Optional[str]:
         """
-        Читает файл любого поддерживаемого формата.
+        Читает текстовый файл.
         Возвращает текст или None в случае ошибки.
         """
         if not file_path.exists():
@@ -167,67 +158,13 @@ class FileFormatReader:
         extension = file_path.suffix.lower()
         
         try:
-            if extension == '.rtf':
-                return FileFormatReader._read_rtf(file_path)
-            elif extension in ['.md', '.txt']:
+            if extension in ['.md', '.txt']:
                 return FileFormatReader._read_text(file_path)
             else:
                 print(f"⚠ Неподдерживаемый формат файла: {extension}")
                 return None
         except Exception as e:
             print(f"❌ Ошибка чтения файла {file_path}: {e}")
-            return None
-    
-    @staticmethod
-    def _read_rtf(file_path: Path) -> Optional[str]:
-        """Читает RTF файл и конвертирует в обычный текст"""
-        if not RTF_SUPPORT:
-            print(f"⚠ RTF поддержка не установлена для файла {file_path}")
-            return None
-        
-        try:
-            # Читаем как бинарный файл
-            with open(file_path, 'rb') as f:
-                raw_data = f.read()
-            
-            if not raw_data:
-                return ""
-            
-            # Пробуем определить кодировку
-            encoding_result = chardet.detect(raw_data)
-            encoding = encoding_result['encoding']
-            
-            # Пробуем разные кодировки
-            encodings_to_try = ['utf-8', 'cp1251', 'cp1252', 'iso-8859-1', 'windows-1251']
-            if encoding and encoding not in encodings_to_try:
-                encodings_to_try.insert(0, encoding)
-            
-            rtf_content = None
-            for enc in encodings_to_try:
-                try:
-                    rtf_content = raw_data.decode(enc, errors='strict')
-                    break
-                except (UnicodeDecodeError, LookupError):
-                    continue
-            
-            if rtf_content is None:
-                # Последняя попытка с игнорированием ошибок
-                try:
-                    rtf_content = raw_data.decode('utf-8', errors='ignore')
-                except:
-                    rtf_content = raw_data.decode('latin-1', errors='ignore')
-            
-            # Конвертируем RTF в обычный текст
-            try:
-                plain_text = rtf.rtf_to_text(rtf_content)
-                return plain_text
-            except Exception as rtf_error:
-                print(f"⚠ Ошибка конвертации RTF {file_path}: {rtf_error}")
-                # Если не удалось сконвертировать, возвращаем как есть
-                return rtf_content
-        
-        except Exception as e:
-            print(f"❌ Ошибка чтения RTF файла {file_path}: {e}")
             return None
     
     @staticmethod
@@ -304,7 +241,7 @@ class TemplateManager:
                     if content:  # Проверяем, что файл не пустой
                         templates = json.loads(content)
                         
-                        # ⭐ ДОБАВЛЕНА ПРОВЕРКА СТРУКТУРЫ ⭐
+                        # Проверка структуры
                         if not isinstance(templates, dict):
                             print(f"❌ Неверный формат: templates должен быть словарем, а не {type(templates).__name__}")
                             raise ValueError("Неправильный формат данных")
@@ -369,7 +306,7 @@ class TemplateManager:
                 {
                     "id": "detailed_with_gaps",
                     "name": "🔍 Детальный анализ с выявлением пробелов",
-                    "description": "Детальный анализ с выявлением недостающих сведений и рекомендациями по их получению",
+                    "description": "Детальный анализ с выявлением недостающих сведений и рекомендациями по их получение",
                     "prompt": "Ты — старший эксперт-аналитик в области землепользования и кадастра.\n\nОСНОВНОЕ ПРАВИЛО: Используй информацию ТОЛЬКО из предоставленных материалов.\n\nКРИТИЧЕСКИ ВАЖНО:\n1. Все выводы должны быть подтверждены материалами\n2. Если информация отсутствует или недостаточна — укажи это ЧЕТКО\n3. Перечисли КОНКРЕТНО какие документы/данные нужны\n4. Никаких предположений и внешних знаний\n\nСТРУКТУРА ОТВЕТА:\n1. КРАТКАЯ СВОДКА: Суть вопроса и общий вывод\n2. ИМЕЮЩИЕСЯ МАТЕРИАЛЫ: Что есть в документах\n3. АНАЛИЗ НА ОСНОВЕ МАТЕРИАЛОВ: Что можно сказать на основе имеющегося\n4. ПРОБЕЛЫ И НЕДОСТАТКИ: Чего не хватает для полного ответа\n5. КОНКРЕТНЫЕ НЕДОСТАЮЩИЕ МАТЕРИАЛЫ: Список необходимых документов/данных\n6. ВЫВОДЫ И РЕКОМЕНДАЦИИ (на основе имеющегося)\n\nОТВЕТ ЭКСПЕРТА:"
                 }
             ],
@@ -755,7 +692,7 @@ class SimpleSectionDatabase:
         # Обновляем базу
         self.sections = all_sections
         
-        # ⭐ ПЕРЕСЧИТЫВАЕМ МЕТАДАННЫЕ НА ОСНОВЕ ФАКТИЧЕСКИХ ДАННЫХ ⭐
+        # Пересчитываем метаданные на основе фактических данных
         self.metadata = self._recalculate_metadata(all_sections)
         
         # Сохраняем
@@ -773,8 +710,7 @@ class SimpleSectionDatabase:
                 for ext, count in self.metadata['format_stats'].items():
                     format_name = {
                         ".md": "Markdown",
-                        ".txt": "Текстовый",
-                        ".rtf": "RTF"
+                        ".txt": "Текстовый"
                     }.get(ext, ext)
                     print(f"     {format_name}: {count} документов")
             
@@ -1063,8 +999,7 @@ class SimpleSectionDatabase:
             # Добавляем иконку формата
             format_icon = {
                 ".md": "📝",
-                ".txt": "📄",
-                ".rtf": "📋"
+                ".txt": "📄"
             }.get(doc_ext.lower(), "📎")
             
             # Добавляем информацию о дате сканирования если есть
@@ -1146,7 +1081,7 @@ class SimpleSectionDatabase:
                 self.sections = import_data['sections']
                 print(f"✅ Импортировано {len(self.sections)} разделов")
                 
-                # ⭐ ПЕРЕСЧИТЫВАЕМ МЕТАДАННЫЕ НА ОСНОВЕ ИМПОРТИРОВАННЫХ ДАННЫХ ⭐
+                # Пересчитываем метаданные на основе импортированных данных
                 self.metadata = self._recalculate_metadata(self.sections)
                 
                 # Если в импортируемых данных есть метаданные, сохраняем created_at
@@ -1643,8 +1578,7 @@ class ExpertFileGenerator:
             for ext, count in format_stats.items():
                 format_name = {
                     ".md": "Markdown",
-                    ".txt": "Текстовый",
-                    ".rtf": "RTF"
+                    ".txt": "Текстовый"
                 }.get(ext, ext)
                 report += f"• {format_name}: {count} документов\n"
         
@@ -1662,8 +1596,7 @@ class ExpertFileGenerator:
             doc_ext = section.get("document_extension", ".txt")
             format_icon = {
                 ".md": "📝",
-                ".txt": "📄",
-                ".rtf": "📋"
+                ".txt": "📄"
             }.get(doc_ext.lower(), "📎")
             
             section_title = section.get("title", "Без названия")

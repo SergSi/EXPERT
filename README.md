@@ -53,7 +53,7 @@
 
 ```bash
 # Установка необходимых библиотек
-pip install streamlit pandas pyyaml chardet striprtf
+pip install streamlit pandas pyyaml chardet 
 
 # Или установка из файла requirements.txt
 pip install -r requirements.txt
@@ -125,7 +125,7 @@ streamlit run app.py --server.port 8501 --server.address 0.0.0.0
    - Методические материалы → папка `METHODOLOGY`
    - Структурированные данные → папка `STRUCTURED`
    - Предыдущие экспертизы → папка `EXPERTISE`
-3. **Проверка форматов файлов** (поддержка: .md, .txt, .rtf)
+3. **Проверка форматов файлов** (поддержка: .md, .txt)
 4. **Внесение YAML-метаданных** в начало документов при необходимости
 
 ### **🔍 Этап 2: Индексирование**
@@ -261,7 +261,7 @@ project/
 ### Если приложение не запускается:
 ```bash
 # Проверьте установку зависимостей
-pip list | grep -E "streamlit|pandas|yaml|chardet|striprtf"
+pip list | grep -E "streamlit|pandas|yaml|chardet"
 
 # Переустановите зависимости
 pip install --force-reinstall streamlit pandas pyyaml chardet
@@ -307,7 +307,7 @@ pip install --force-reinstall streamlit pandas pyyaml chardet
 
 ### 1. 📝 Markdown (`.md`)
 - **Рекомендуемый формат**
-- Поддерживает структурирование заголовками (`#`, `##`, `###`)
+- Поддерживает структурирование заголовками (`#`, `##`)
 
 
 ### 2. 📄 Текстовые файлы (`.txt`)
@@ -315,7 +315,3 @@ pip install --force-reinstall streamlit pandas pyyaml chardet
 - Простой текстовый формат
 - Автоматическое определение кодировки (UTF-8, Windows-1251, KOI8-R и др.)
 - Поддерживает разделение по правилам для каждой папки
-
-### 3. 📋 RTF файлы (`.rtf`) 
-
-- Формат Rich Text Format (Microsoft Word и др.)
