@@ -429,32 +429,30 @@ class SimpleSectionDatabase:
         }
     
     def _clean_text_from_comments(self, text: str) -> str:
-        """Очищает текст от различных комментариев и служебной информации"""
+        """Очищает текст от примечаний КонсультантПлюс и простейших паттернов"""
         if not text:
             return text
         
-        # Паттерны для удаления - ТОЛЬКО конкретные комментарии
-        patterns_to_remove = [
-            r'\(в ред\. [^)]*\)',
-            r'\(введена [^)]*\)',
-            r'\(п\. \d+ в ред\. [^)]*\)',
-            r'\[[^\]]*Консультант[^\]]*\]',
-            r'КонсультантПлюс: примечание\..*?(?=\n\n|\Z)',
-            r'Федеральн(?:ого|ым) законом от \d{2}\.\d{2}\.\d{4} [№N]\d+-\S+',
-            r'см\. [^.]*\.',
-            r'ред\. \d{2}\.\d{2}\.\d{4}',
-            r'©.*',
-            r'\(п\. \d+\.\d введен Федеральным законом от \d{2}\.\d{2}\.\d{4} N \d+-\S+\)',
-            r'\(в ред\. Федерального закона от \d{2}\.\d{2}\.\d{4} N \d+-\S+\)'
-        ]
+        # 1. Удаляем строки с примечаниями КонсультантПлюс
+        lines = text.split('\n')
+        cleaned_lines = []
         
-        cleaned_text = text
+        for line in lines:
+            # Ищем "Консультант" и "примечание" в строке
+            if ('консультант' in line.lower() and 
+                'примечание' in line.lower() and
+                line.strip().startswith('[')):
+                # Это примечание КонсультантПлюс - пропускаем
+                continue
+            cleaned_lines.append(line)
         
-        # Очищаем каждый паттерн отдельно
-        for pattern in patterns_to_remove:
-            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE|re.DOTALL)
+        result = '\n'.join(cleaned_lines)
         
-        return cleaned_text
+        # 2. Только ДВА самых безопасных паттерна
+        result = re.sub(r'\(в ред\. [^)]*\)', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'©.*', '', result)
+        
+        return result
     
     def _clean_special_characters(self, text: str) -> str:
         """Очищает текст от специальных символов и форматирования, убирает лишние пустые строки"""
