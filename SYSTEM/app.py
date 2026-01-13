@@ -433,26 +433,54 @@ class SimpleSectionDatabase:
         if not text:
             return text
         
-        # 1. Удаляем строки с примечаниями КонсультантПлюс
-        lines = text.split('\n')
+        cleaned_text = text
+        
+        # 1. Удаляем строки, начинающиеся с КонсультантПлюс примечаний (из вашего примера)
+        consultant_patterns = [
+            r'КонсультантПлюс: примечание\.[^\n]*\n',  # Однострочные
+            r'\[Консультант[^\]]*примечание[^\]]*\][^\n]*\n',  # В квадратных скобках
+        ]
+        
+        for pattern in consultant_patterns:
+            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
+        
+        # 2. Удаляем другие служебные пометки (из вашего примера)
+        service_patterns = [
+            r'С \d{2}\.\d{2}\.\d{4}[^\n]*\n',  # Даты изменений
+            r'<\d+>',  # Встроенные сноски
+            r'--------------------------------\s*\n<[0-9]+>.*?\n',  # Номерные сноски
+        ]
+        
+        for pattern in service_patterns:
+            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.DOTALL)
+        
+        # 3. Удаляем простые юридические пометки (из вашего кода)
+        legal_patterns = [
+            r'\(в ред\. [^)]*\)',
+            r'\(введена [^)]*\)',
+            r'ред\. \d{2}\.\d{2}\.\d{4}',
+            r'©.*',
+        ]
+        
+        for pattern in legal_patterns:
+            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE)
+        
+        # 4. ДОПОЛНИТЕЛЬНО: удаляем строки, содержащие "консультант" (ваше требование)
+        lines = cleaned_text.split('\n')
         cleaned_lines = []
         
         for line in lines:
-            # Ищем "Консультант" и "примечание" в строке
-            if ('консультант' in line.lower() and 
-                'примечание' in line.lower() and
-                line.strip().startswith('[')):
-                # Это примечание КонсультантПлюс - пропускаем
-                continue
+            if 'консультант' in line.lower():
+                continue  # Пропускаем строки с консультантом
             cleaned_lines.append(line)
         
-        result = '\n'.join(cleaned_lines)
+        cleaned_text = '\n'.join(cleaned_lines)
         
-        # 2. Только ДВА самых безопасных паттерна
-        result = re.sub(r'\(в ред\. [^)]*\)', '', result, flags=re.IGNORECASE)
-        result = re.sub(r'©.*', '', result)
+        # 5. Финализация (из вашего примера)
+        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)  # Множественные переносы
+        cleaned_text = cleaned_text.strip()  # Убираем пробелы по краям
         
-        return result
+        return cleaned_text
     
     def _clean_special_characters(self, text: str) -> str:
         """Очищает текст от специальных символов и форматирования, убирает лишние пустые строки"""
