@@ -429,7 +429,7 @@ class SimpleSectionDatabase:
         }
     
     def _clean_text_from_comments(self, text: str) -> str:
-        """Очищает текст от примечаний КонсультантПлюс и простейших паттернов"""
+        """Очищает текст от примечаний КонсультантПлюс/ГАРАНТ и служебных пометок"""
         if not text:
             return text
         
@@ -444,7 +444,35 @@ class SimpleSectionDatabase:
         for pattern in consultant_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
         
-        # 2. Удаляем другие служебные пометки (из вашего примера)
+        # 2. Удаляем блоки ГАРАНТ (многострочные с сохранением структуры закона)
+        # ТОЧЕЧНО ДОБАВЛЕНО: очистка служебных отметок ГАРАНТ
+        garant_patterns = [
+            # Блок "ГАРАНТ:" с последующим текстом до начала статьи/пункта
+            r'ГАРАНТ:\s*\n\s*См\. [^\n]*\n',
+            r'ГАРАНТ:\s*\n\s*[^\n]*См\. [^\n]*\n',
+            # Строки со "См." внутри блока ГАРАНТ
+            r'^\s*См\.\s+Энциклопедии[^\n]*\n',
+            r'^\s*См\.\s+схему[^\n]*\n',
+            r'^\s*См\.\s+позиции[^\n]*\n',
+            r'^\s*См\.\s+[^\n]*к статье[^\n]*\n',
+            r'^\s*См\.\s+Федеральный закон[^\n]*\n',
+        ]
+        
+        for pattern in garant_patterns:
+            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
+        
+        # 3. Удаляем информационные блоки об изменениях (без удаления самого текста)
+        # ТОЧЕЧНО ДОБАВЛЕНО: только заголовки блоков изменений
+        change_info_patterns = [
+            r'Информация об изменениях:\s*\n',
+            r'Изменения вступают в силу[^\n]*\n',
+            r'См\.\s*(?:будущую|предыдущую|текст)[^\n]*редакцию[^\n]*\n',
+        ]
+        
+        for pattern in change_info_patterns:
+            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
+        
+        # 4. Удаляем другие служебные пометки (из вашего примера)
         service_patterns = [
             r'С \d{2}\.\d{2}\.\d{4}[^\n]*\n',  # Даты изменений
             r'<\d+>',  # Встроенные сноски
@@ -454,7 +482,7 @@ class SimpleSectionDatabase:
         for pattern in service_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.DOTALL)
         
-        # 3. Удаляем простые юридические пометки (из вашего кода)
+        # 5. Удаляем простые юридические пометки (из вашего кода)
         legal_patterns = [
             r'\(в ред\. [^)]*\)',
             r'\(введена [^)]*\)',
@@ -465,18 +493,72 @@ class SimpleSectionDatabase:
         for pattern in legal_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE)
         
-        # 4. ДОПОЛНИТЕЛЬНО: удаляем строки, содержащие "консультант" (ваше требование)
+        # 6. ТОЧЕЧНО ДОБАВЛЕНО: удаляем строки с конкретными служебными фразами ГАРАНТ
+        # (сохраняя при этом текст самого закона)
         lines = cleaned_text.split('\n')
         cleaned_lines = []
         
-        for line in lines:
-            if 'консультант' in line.lower():
-                continue  # Пропускаем строки с консультантом
+        skip_next_line = False
+        
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            
+            # Если предыдущая строка была "ГАРАНТ:", пропускаем текущую строку
+            if skip_next_line:
+                skip_next_line = False
+                continue
+            
+            # Проверяем, является ли строка служебной пометкой ГАРАНТ
+            # (но не частью текста закона)
+            is_garant_service_line = (
+                line_stripped.startswith('ГАРАНТ:') or
+                line_stripped.startswith('См. ') or
+                line_stripped.startswith('См ') or
+                'Федеральным законом от' in line_stripped and 'N' in line_stripped or
+                'Подпункт' in line_stripped and 'изменен' in line_stripped or
+                'Пункт' in line_stripped and 'изменен' in line_stripped and not line_stripped.startswith('Пункт 1.') or
+                'Статья' in line_stripped and ('дополнена' in line_stripped or 'изменена' in line_stripped) and not line_stripped.startswith('Статья 1.') or
+                line_stripped == 'Информация об изменениях:' or
+                'консультант' in line_stripped.lower()  # Ваше требование
+            )
+            
+            # Если это служебная строка ГАРАНТ, пропускаем ее
+            if is_garant_service_line:
+                # Если это строка "ГАРАНТ:", возможно, следующая строка тоже служебная
+                if line_stripped.startswith('ГАРАНТ:'):
+                    skip_next_line = True
+                continue
+            
+            # Сохраняем строку (это текст закона или значимый контент)
             cleaned_lines.append(line)
         
         cleaned_text = '\n'.join(cleaned_lines)
         
-        # 5. Финализация (из вашего примера)
+        # 7. Удаляем пустые строки, которые могли образоваться после удаления служебных блоков
+        # ТОЧЕЧНО ДОБАВЛЕНО: более аккуратная обработка пустых строк
+        lines = cleaned_text.split('\n')
+        cleaned_lines = []
+        previous_was_empty = False
+        
+        for line in lines:
+            line_stripped = line.strip()
+            
+            if not line_stripped:
+                if not previous_was_empty:
+                    cleaned_lines.append('')  # Оставляем одну пустую строку для разделения
+                    previous_was_empty = True
+            else:
+                # Проверяем, не является ли строка остатком служебной информации
+                # после предыдущей очистки
+                if not (line_stripped.startswith('N ') or 
+                       re.match(r'^N\s+\d+', line_stripped) or
+                       line_stripped.startswith('Изменен') and 'г.' in line_stripped):
+                    cleaned_lines.append(line)
+                    previous_was_empty = False
+        
+        cleaned_text = '\n'.join(cleaned_lines)
+        
+        # 8. Финализация (из вашего примера)
         cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)  # Множественные переносы
         cleaned_text = cleaned_text.strip()  # Убираем пробелы по краям
         

@@ -1,45 +1,37 @@
 {
   "created_at": "",
-  "last_updated": "2026-01-14T22:28:25.577248",
-  "total_sections": 155,
-  "total_documents": 12,
+  "last_updated": "2026-01-17T19:17:19.810532",
+  "total_sections": 209,
+  "total_documents": 13,
   "by_folder": {
     "normative": {
-      "documents": 7,
-      "sections": 132,
-      "words": 469444,
+      "documents": 8,
+      "sections": 179,
+      "words": 496546,
       "formats": {
-        ".txt": 132
+        ".txt": 179
       }
     },
     "methodology": {
-      "documents": 2,
-      "sections": 11,
-      "words": 18107,
+      "documents": 3,
+      "sections": 19,
+      "words": 24009,
       "formats": {
-        ".md": 11
+        ".md": 19
       }
     },
     "structured": {
       "documents": 2,
       "sections": 11,
-      "words": 34895,
+      "words": 34547,
       "formats": {
         ".txt": 11
-      }
-    },
-    "expertise": {
-      "documents": 1,
-      "sections": 1,
-      "words": 5957,
-      "formats": {
-        ".md": 1
       }
     }
   },
   "format_stats": {
-    ".txt": 143,
-    ".md": 12
+    ".txt": 190,
+    ".md": 19
   },
   "supported_extensions": [
     ".md",
