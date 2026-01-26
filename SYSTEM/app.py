@@ -289,7 +289,7 @@ class TemplateManager:
                     "id": "analytical_report",
                     "name": "📊 Аналитический отчет",
                     "description": "Аналитический отчет с детальным анализом нормативной базы и практическими рекомендациями",
-                    "prompt": "Ты — старший эксперт-аналитик в области землепользования, кадастра и градостроительного регулирования.\n\nОСНОВНОЕ ПРАВИЛО: Используй информацию ТОЛЬКО из предоставленных материалов.\n\nВАЖНО:\n- Каждое утверждение должно подтверждаться предоставленными материалами\n- Если информации недостаточно — прямо указывай на это\n- Если в материалах отсутствуют нужные сведения, укажи КАКИЕ ИМЕННО дополнительные материалы необходимы\n- Не используй внешние знания\n\nСТРУКТУРА ОТВЕТА:\n1. КРАТКИЙ ОТВЕТ: Основной вывод в 2-3 предложениях\n2. НОРМАТИВНАЯ БАЗА: Ключевые документы из материалов\n3. АНАЛИЗ: Связь норм с вопросом на основе материалов\n4. ВЫВОДЫ: Пронумерованные выводы из материалов\n5. РЕКОМЕНДАЦИИ: Конкретные действия, обоснованные материалами\n6. НЕДОСТАЮЩИЕ МАТЕРИАЛЫ (если требуется): Какие именно документы или сведения отсутствуют\n\nОТВЕТ ЭКСПЕРТА-АНАЛИТИКА:"
+                    "prompt": "Ты — старший эксперт-аналитик в области землепользования, кадастра и градостроительного регулирования.\n\nОСНОВНОЕ ПРАВИЛО: Используй информацию ТОЛЬКО из предоставленных материалов.\n\nВАЖНО:\n- Каждое утверждение должно подтверждаться предоставленными материалами\n- Если информации недостаточно — прямо указывай на это\n- Если в материалах отсутствуют нужные сведения, укажи КАКИЕ ИМЕННО дополнительные материалы необходимы\n- Не используй внешние знания\n\nСТРУКТУРА ОТВЕТА:\n1. КРАТКИЙ ОТВЕТ: Основной вывод в 2-3 предложениях\n2. НОРМАТИВНАЯ БАЗА: Ключевые документы из материалов\n3. АНАЛИЗ: Связь норм с вопросю на основе материалов\n4. ВЫВОДЫ: Пронумерованные выводы из материалов\n5. РЕКОМЕНДАЦИИ: Конкретные действия, обоснованные материалами\n6. НЕДОСТАЮЩИЕ МАТЕРИАЛЫ (если требуется): Какие именно документы или сведения отсутствуют\n\nОТВЕТ ЭКСПЕРТА-АНАЛИТИКА:"
                 },
                 {
                     "id": "brief_qa",
@@ -461,7 +461,7 @@ class SimpleSectionDatabase:
         for pattern in garant_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
         
-        # 3. Удаляем информационные блоки об изменениях (без удаления самого текста)
+        # 3. Удаляем информационные блоки об измененияи (без удаления самого текста)
         # ТОЧЕЧНО ДОБАВЛЕНО: только заголовки блоков изменений
         change_info_patterns = [
             r'Информация об изменениях:\s*\n',
@@ -1355,31 +1355,58 @@ class SimpleSectionDatabase:
         return [s for s in self.sections if s.get("folder") == folder_name]
     
     def get_unique_documents(self) -> List[Dict]:
-        """Возвращает список уникальных документов"""
+        """Возвращает список уникальных документов с полной информацией"""
         unique_docs = {}
         
         for section in self.sections:
-            doc_key = f"{section.get('document_path', '')}_{section.get('document', '')}"
+            # Создаем уникальный ключ документа
+            doc_key = f"{section.get('folder', '')}_{section.get('document_path', '')}_{section.get('document', '')}"
+            
             if doc_key not in unique_docs:
+                # Получаем статистику по разделам для этого документа
+                doc_sections = []
+                for s in self.sections:
+                    if (s.get('folder') == section.get('folder') and 
+                        s.get('document_path') == section.get('document_path') and 
+                        s.get('document') == section.get('document')):
+                        doc_sections.append({
+                            "id": s.get("id"),
+                            "title": s.get("title"),
+                            "type": s.get("section_type"),
+                            "word_count": s.get("word_count"),
+                            "selected": s.get("selected", False)
+                        })
+                
                 unique_docs[doc_key] = {
+                    "key": doc_key,
+                    "folder": section.get("folder", ""),
                     "path": section.get("document_path", ""),
                     "name": section.get("document", ""),
-                    "title": section.get("document_title", ""),
+                    "title": section.get("document_title", section.get("document", "")),
                     "extension": section.get("document_extension", ""),
-                    "folder": section.get("folder", ""),
-                    "sections_count": 0,
-                    "sections": []
+                    "sections_count": len(doc_sections),
+                    "sections": doc_sections,
+                    "selected_sections": sum(1 for s in doc_sections if s.get("selected", False)),
+                    "total_words": sum(s.get("word_count", 0) for s in doc_sections)
                 }
-            
-            unique_docs[doc_key]["sections_count"] += 1
-            unique_docs[doc_key]["sections"].append({
-                "id": section.get("id"),
-                "title": section.get("title"),
-                "type": section.get("section_type"),
-                "word_count": section.get("word_count")
-            })
         
-        return list(unique_docs.values())
+        # Преобразуем в список и сортируем по названию
+        doc_list = list(unique_docs.values())
+        doc_list.sort(key=lambda x: x['title'].lower())
+        
+        return doc_list
+    
+    def get_sections_by_document(self, folder: str, doc_path: str, doc_name: str) -> List[Dict]:
+        """Возвращает все разделы конкретного документа"""
+        sections = []
+        
+        for section in self.sections:
+            if (section.get('folder') == folder and 
+                section.get('document_path') == doc_path and 
+                section.get('document') == doc_name):
+                sections.append(section)
+        
+        return sections
 
 # ==============================================
 # ГЕНЕРАТОР ФАЙЛОВ ДЛЯ ЭКСПЕРТА
@@ -1928,46 +1955,28 @@ with tab1:
     if not display_data:
         st.info("База пуста. Нажмите 'Сканировать папки' в боковой панели.")
     else:
-        # Компактная панель фильтров
+        # ТОЛЬКО ПОИСК - убраны фильтры по папке и типу
         with st.container():
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns([0.3, 0.7])
             
             with col1:
-                # Фильтр по папке
-                folder_options = list(set(item["folder"] for item in display_data))
-                folder_filter = st.multiselect(
-                    "Папка:",
-                    options=folder_options,
-                    default=folder_options,
-                    format_func=lambda x: {
-                        "normative": "📖 Нормативные",
-                        "methodology": "📚 Методические",
-                        "structured": "🗂️ Структурированные",
-                        "expertise": "👨‍⚖️ Экспертные"
-                    }.get(x, x)
-                )
+                # Поиск по тексту
+                search_text = st.text_input("Поиск:", placeholder="По документу или разделу...", key="search_input_tab1")
             
             with col2:
-                # Фильтр по типу
-                type_options = list(set(item["type"] for item in display_data))
-                type_filter = st.multiselect(
-                    "Тип раздела:",
-                    options=type_options,
-                    default=type_options
+                # Фильтр по документу
+                doc_options = list(set(item["document_full"] for item in display_data))
+                doc_options.sort()
+                doc_filter = st.multiselect(
+                    "Документ:",
+                    options=doc_options,
+                    format_func=lambda x: x[:40] + "..." if len(x) > 40 else x,
+                    help="Выберите конкретный документ",
+                    key="doc_filter_tab1"
                 )
-            
-            with col3:
-                # Поиск по тексту
-                search_text = st.text_input("Поиск:", placeholder="По документу или разделу...")
         
         # Фильтрация данных
         filtered_data = display_data.copy()
-        
-        if folder_filter:
-            filtered_data = [item for item in filtered_data if item["folder"] in folder_filter]
-        
-        if type_filter:
-            filtered_data = [item for item in filtered_data if item["type"] in type_filter]
         
         if search_text:
             search_lower = search_text.lower()
@@ -1977,8 +1986,11 @@ with tab1:
                     search_lower in item["section_full"].lower())
             ]
         
+        if doc_filter:
+            filtered_data = [item for item in filtered_data if item["document_full"] in doc_filter]
+        
         # Создаем хэш текущих фильтров
-        current_filter_hash = f"{folder_filter}_{type_filter}_{search_text}"
+        current_filter_hash = f"{search_text}_{doc_filter}"
         
         # Обновляем хэш фильтров
         if st.session_state.current_filter_hash != current_filter_hash:
@@ -1997,7 +2009,7 @@ with tab1:
                 st.metric("Выбрано", selected_count)
             
             with col_stat3:
-                if st.button("✅ Выбрать все", use_container_width=True):
+                if st.button("✅ Выбрать все", use_container_width=True, key="select_all_tab1"):
                     for item in filtered_data:
                         for section in db.sections:
                             if section.get("id") == item["id"]:
@@ -2007,7 +2019,7 @@ with tab1:
                     st.rerun()
             
             with col_stat4:
-                if st.button("❌ Снять все", use_container_width=True):
+                if st.button("❌ Снять все", use_container_width=True, key="deselect_all_tab1"):
                     for item in filtered_data:
                         for section in db.sections:
                             if section.get("id") == item["id"]:
@@ -2071,7 +2083,6 @@ with tab1:
                         
                         # Метаданные в одной строке
                         meta_info = []
-                        meta_info.append(f"Тип: {item['type']}")
                         meta_info.append(f"Формат: {item.get('extension', '.txt')}")
                         meta_info.append(f"Слов: {item['words']}")
                         if item["selected"]:
@@ -2105,7 +2116,7 @@ with tab1:
                     save_disabled = not st.session_state.has_unsaved_changes
                     
                     if st.button("💾 Сохранить выбор", type="primary", 
-                               disabled=save_disabled, use_container_width=True):
+                               disabled=save_disabled, use_container_width=True, key="save_tab1"):
                         db.save_database()
                         st.success("✅ Выбор сохранен!")
                         add_notification("Выбор разделов сохранен", "success")
@@ -2118,7 +2129,7 @@ with tab1:
                     create_disabled = total_selected == 0
                     
                     if st.button("🤖 Создать файлы", type="secondary",
-                               disabled=create_disabled, use_container_width=True):
+                               disabled=create_disabled, use_container_width=True, key="create_files_tab1"):
                         selected_sections = db.get_selected_sections()
                         
                         with st.spinner("Создаю файлы..."):
@@ -2185,7 +2196,7 @@ with tab2:
                 
                 with col1:
                     # Радио-кнопка для выбора
-                    if st.button("✓", key=f"select_template_{template['id']}", 
+                    if st.button("✓", key=f"select_template_{template['id']}_tab2", 
                                disabled=is_selected, use_container_width=True):
                         st.session_state.selected_template = template["id"]
                         st.success(f"Выбран шаблон: {template['name']}")
@@ -2211,7 +2222,7 @@ with tab2:
                            value=current_template.get("prompt", ""),
                            height=300,
                            disabled=True,
-                           key=f"preview_{current_template['id']}")
+                           key=f"preview_{current_template['id']}_tab2")
         
         # Отображение кнопок для скачивания файлов
         if st.session_state.files_created and st.session_state.session_dir:
@@ -2236,7 +2247,8 @@ with tab2:
                         file_name=f"all_sections.md",
                         mime="text/markdown",
                         use_container_width=True,
-                        help="Все выбранные разделы"
+                        help="Все выбранные разделы",
+                        key="download_sections_tab2"
                     )
             
             # Файл deepseek_prompt.txt
@@ -2252,7 +2264,8 @@ with tab2:
                         file_name=f"deepseek_prompt.txt",
                         mime="text/plain",
                         use_container_width=True,
-                        help="Промт для DeepSeek"
+                        help="Промт для DeepSeek",
+                        key="download_prompt_tab2"
                     )
             
             # Файл report.txt
@@ -2268,7 +2281,8 @@ with tab2:
                         file_name=f"report.txt",
                         mime="text/plain",
                         use_container_width=True,
-                        help="Отчет по сессии"
+                        help="Отчет по сессии",
+                        key="download_report_tab2"
                     )
             
             # Файл sections_data.json
@@ -2284,7 +2298,8 @@ with tab2:
                         file_name=f"sections_data.json",
                         mime="application/json",
                         use_container_width=True,
-                        help="Данные в JSON"
+                        help="Данные в JSON",
+                        key="download_json_tab2"
                     )
             
             # Файл template_info.json
@@ -2300,7 +2315,8 @@ with tab2:
                         file_name=f"template_info.json",
                         mime="application/json",
                         use_container_width=True,
-                        help="Информация о шаблоне"
+                        help="Информация о шаблоне",
+                        key="download_template_tab2"
                     )
 
 # ==============================================
@@ -2324,14 +2340,14 @@ with tab3:
         st.text_input(
             f"{display_name}:",
             value=folder_path,
-            key=f"config_path_{folder_name}",
+            key=f"config_path_{folder_name}_tab3",
             disabled=True
         )
     
     st.markdown("---")
     
     # Проверка доступности папок
-    if st.button("🔍 Проверить доступность папок", type="secondary"):
+    if st.button("🔍 Проверить доступность папок", type="secondary", key="check_folders_tab3"):
         status = validate_folders(CONFIG["folders"])
         
         if status["all_exist"]:
@@ -2359,7 +2375,8 @@ with tab3:
                 file_name="config.json",
                 mime="application/json",
                 use_container_width=True,
-                help="Скачайте, отредактируйте и перезапустите приложение"
+                help="Скачайте, отредактируйте и перезапустите приложение",
+                key="download_config_tab3"
             )
             
             with st.expander("👁️ Показать текущий config.json"):
@@ -2371,7 +2388,7 @@ with tab3:
         st.info("Файл config.json не найден. Используются настройки по умолчанию.")
         
         # Кнопка для создания config.json с текущими настройками
-        if st.button("📄 Создать config.json", type="primary"):
+        if st.button("📄 Создать config.json", type="primary", key="create_config_tab3"):
             if save_config(CONFIG):
                 st.success("Файл config.json создан! Перезапустите приложение.")
                 add_notification("Файл конфигурации создан", "success")
@@ -2412,7 +2429,7 @@ with tab4:
         st.markdown("---")
         
         # Кнопка сканирования папок
-        if st.button("🔍 Сканировать папки", type="primary", use_container_width=True):
+        if st.button("🔍 Сканировать папки", type="primary", use_container_width=True, key="scan_folders_tab4"):
             with st.spinner("Сканирую папки и обновляю базу данных..."):
                 try:
                     db.scan_and_build_database()
@@ -2447,15 +2464,15 @@ with tab4:
                     add_notification(f"Ошибка сканирования: {str(e)}", "error")
         
         # Кнопка очистки базы
-        if st.button("🗑️ Очистить базу данных", type="secondary", use_container_width=True):
+        if st.button("🗑️ Очистить базу данных", type="secondary", use_container_width=True, key="clear_db_tab4"):
             st.warning("⚠️ **ВНИМАНИЕ:** Это действие полностью очистит базу данных!")
             
             # Дополнительное подтверждение
             col_confirm1, col_confirm2 = st.columns(2)
             with col_confirm1:
-                confirm_clear = st.checkbox("Я понимаю, что все данные будут удалены")
+                confirm_clear = st.checkbox("Я понимаю, что все данные будут удалены", key="confirm_clear_checkbox")
             with col_confirm2:
-                if confirm_clear and st.button("✅ Подтвердить очистку", type="primary"):
+                if confirm_clear and st.button("✅ Подтвердить очистку", type="primary", key="confirm_clear_btn"):
                     try:
                         # Очищаем базу
                         db.sections = []
@@ -2484,7 +2501,7 @@ with tab4:
         st.markdown("---")
         st.markdown("##### 👁️ ПРОСМОТР СТРУКТУРЫ БАЗЫ")
         
-        if st.button("📋 Показать структуру базы", use_container_width=True):
+        if st.button("📋 Показать структуру базы", use_container_width=True, key="show_structure_tab4"):
             with st.expander("📁 Структура базы данных"):
                 if db.sections:
                     # Группируем по папкам
@@ -2534,7 +2551,7 @@ with tab4:
         uploaded_file = st.file_uploader(
             "Выберите файл базы (JSON):",
             type=['json'],
-            key="import_uploader",
+            key="import_uploader_tab4",
             help="Загрузите JSON файл с экспортированной базой данных"
         )
         
@@ -2592,7 +2609,7 @@ with tab4:
                 # Кнопка импорта
                 st.markdown("---")
                 if st.button("📥 Импортировать данные с пересчетом метаданных", 
-                           type="primary", use_container_width=True):
+                           type="primary", use_container_width=True, key="import_data_btn"):
                     
                     with st.spinner("Импортирую и пересчитываю метаданные..."):
                         try:
@@ -2670,7 +2687,7 @@ with tab4:
         # Секция экспорта
         st.markdown("##### 📤 ЭКСПОРТ ТЕКУЩЕЙ БАЗЫ")
         
-        if st.button("📤 Экспортировать базу данных", type="secondary", use_container_width=True):
+        if st.button("📤 Экспортировать базу данных", type="secondary", use_container_width=True, key="export_db_btn"):
             try:
                 # Подготавливаем данные для экспорта
                 export_data = {
@@ -2698,7 +2715,8 @@ with tab4:
                     file_name=filename,
                     mime="application/json",
                     use_container_width=True,
-                    help="Скачайте файл для резервного копирования или переноса данных"
+                    help="Скачайте файл для резервного копирования или переноса данных",
+                    key="download_export_btn"
                 )
                 
                 add_notification(f"База экспортирована в {filename}", "info")
@@ -2730,14 +2748,14 @@ with tab4:
                     new_name = st.text_input(
                         "Название шаблона:", 
                         value=template.get('name', ''),
-                        key=f"name_{template['id']}",
+                        key=f"name_{template['id']}_tab4",
                         help="Название шаблона, которое будет отображаться в списке"
                     )
                     
                     new_description = st.text_area(
                         "Описание шаблона:",
                         value=template.get('description', ''),
-                        key=f"desc_{template['id']}",
+                        key=f"desc_{template['id']}_tab4",
                         help="Краткое описание назначения шаблона",
                         height=80
                     )
@@ -2746,7 +2764,7 @@ with tab4:
                         "Текст шаблона (prompt):",
                         value=template.get('prompt', ''),
                         height=200,
-                        key=f"prompt_{template['id']}",
+                        key=f"prompt_{template['id']}_tab4",
                         help="Текст, который будет отправляться ИИ вместе с материалами"
                     )
                     
@@ -2754,7 +2772,7 @@ with tab4:
                     col_btn1, col_btn2 = st.columns(2)
                     
                     with col_btn1:
-                        if st.button("💾 Сохранить изменения", key=f"save_{template['id']}", use_container_width=True):
+                        if st.button("💾 Сохранить изменения", key=f"save_{template['id']}_tab4", use_container_width=True):
                             if new_name and new_prompt:
                                 # Обновляем шаблон
                                 template['name'] = new_name
@@ -2772,12 +2790,12 @@ with tab4:
                     with col_btn2:
                         # Проверяем, не является ли это последним шаблоном
                         if len(templates) > 1:
-                            if st.button("🗑️ Удалить шаблон", key=f"delete_{template['id']}", 
+                            if st.button("🗑️ Удалить шаблон", key=f"delete_{template['id']}_tab4", 
                                        type="secondary", use_container_width=True):
                                 # Подтверждение удаления
                                 st.warning(f"Вы уверены, что хотите удалить шаблон '{template['name']}'?")
                                 if st.button(f"✅ Да, удалить '{template['name']}'", 
-                                           key=f"confirm_delete_{template['id']}"):
+                                           key=f"confirm_delete_{template['id']}_tab4"):
                                     # Удаляем шаблон
                                     new_templates_list = [t for t in templates if t['id'] != template['id']]
                                     template_manager.templates["templates"] = new_templates_list
@@ -2793,25 +2811,28 @@ with tab4:
     with col_template2:
         st.markdown("##### ➕ СОЗДАТЬ НОВЫЙ ШАБЛОН")
         
-        with st.form("new_template_form", clear_on_submit=True):
+        with st.form("new_template_form_tab4", clear_on_submit=True):
             new_template_name = st.text_input(
                 "Название нового шаблона:", 
                 placeholder="Например: Технический анализ",
-                help="Придумайте понятное название для нового шаблона"
+                help="Придумайте понятное название для нового шаблона",
+                key="new_template_name_tab4"
             )
             
             new_template_desc = st.text_area(
                 "Описание шаблона:",
                 placeholder="Краткое описание цели шаблона",
                 help="Опишите, для каких задач предназначен этот шаблон",
-                height=80
+                height=80,
+                key="new_template_desc_tab4"
             )
             
             new_template_prompt = st.text_area(
                 "Текст шаблона (prompt):",
                 placeholder="Введите текст промта для ИИ...",
                 height=250,
-                help="Основной текст, который будет отправляться ИИ. Можно использовать стандартные структуры ответа."
+                help="Основной текст, который будет отправляться ИИ. Можно использовать стандартные структуры ответа.",
+                key="new_template_prompt_tab4"
             )
             
             # Примеры промтов
@@ -2832,7 +2853,7 @@ with tab4:
                 ```
                 """)
             
-            submit_btn = st.form_submit_button("➕ Создать новый шаблон", type="primary", use_container_width=True)
+            submit_btn = st.form_submit_button("➕ Создать новый шаблон", type="primary", use_container_width=True, key="create_template_btn_tab4")
         
         # Обработка формы (ВНЕ формы)
         if submit_btn:
@@ -2877,7 +2898,8 @@ with tab4:
         
         if st.button("🔄 Перезагрузить шаблоны из файла", 
                    type="secondary", use_container_width=True,
-                   help="Загружает шаблоны из файла templates.json, отменяя все несохраненные изменения"):
+                   help="Загружает шаблоны из файла templates.json, отменяя все несохраненные изменения",
+                   key="reload_templates_btn"):
             
             with st.spinner("Перезагружаю шаблоны..."):
                 try:
@@ -2906,9 +2928,10 @@ with tab4:
         if selected_count > 0:
             if st.button("❌ Сбросить все выборы разделов", 
                        type="secondary", use_container_width=True,
-                       help="Отменяет все выбранные разделы во всех документах"):
+                       help="Отменяет все выбранные разделы во всех документах",
+                       key="clear_selections_btn"):
                 
-                if st.checkbox("Подтвердить сброс всех выборов"):
+                if st.checkbox("Подтвердить сброс всех выборов", key="confirm_clear_selections"):
                     with st.spinner("Сбрасываю выборы..."):
                         db.clear_selections()
                         st.success(f"✅ Сброшено {selected_count} выборов разделов!")
@@ -2933,6 +2956,10 @@ with st.sidebar:
     selected_count = sum(1 for section in db.sections if section.get("selected", False))
     st.metric("Выбрано разделов", selected_count)
     
+    # Статистика по документам
+    unique_docs = db.get_unique_documents()
+    st.metric("Уникальных документов", len(unique_docs))
+    
     # Информация о выбранном шаблоне
     current_template = template_manager.get_template_by_id(st.session_state.selected_template)
     if current_template:
@@ -2949,7 +2976,7 @@ with st.sidebar:
     
     # Кнопка сохранения если есть изменения
     if st.session_state.has_unsaved_changes:
-        if st.button("💾 Сохранить выбор", type="primary", use_container_width=True):
+        if st.button("💾 Сохранить выбор", type="primary", use_container_width=True, key="save_sidebar"):
             db.save_database()
             st.success("Сохранено!")
             st.session_state.has_unsaved_changes = False
@@ -2957,7 +2984,7 @@ with st.sidebar:
     
     # Кнопка создания промта
     if selected_count > 0:
-        if st.button("🤖 Создать файлы сессии", type="secondary", use_container_width=True):
+        if st.button("🤖 Создать файлы сессии", type="secondary", use_container_width=True, key="create_files_sidebar"):
             # Устанавливаем флаг, чтобы показать кнопки скачивания
             selected_sections = db.get_selected_sections()
             with st.spinner("Создаю файлы..."):
@@ -2992,7 +3019,7 @@ with st.sidebar:
             
             st.caption(f"{icon} {notification['time']}: {notification['message']}")
         
-        if st.button("Очистить уведомления", use_container_width=True):
+        if st.button("Очистить уведомления", use_container_width=True, key="clear_notifications_btn"):
             st.session_state.notifications = []
             st.rerun()
     else:
