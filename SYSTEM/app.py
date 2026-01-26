@@ -1968,10 +1968,10 @@ with tab1:
                 doc_options = list(set(item["document_full"] for item in display_data))
                 doc_options.sort()
                 doc_filter = st.multiselect(
-                    "Документ:",
+                    "Фильтр по документу:",
                     options=doc_options,
                     format_func=lambda x: x[:40] + "..." if len(x) > 40 else x,
-                    help="Выберите конкретный документ",
+                    help="Выберите конкретный документ для просмотра и выбора разделов",
                     key="doc_filter_tab1"
                 )
         
