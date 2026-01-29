@@ -1939,7 +1939,7 @@ with tab2:
     with col_create1:
         new_session_name = st.text_input(
             "Имя новой сессии (необязательно):",
-            placeholder="Оставьте пустым для автоназвания",
+            placeholder="Оставьте пустым для автоназвания или начните с session_",
             key="new_session_name"
         )
     
