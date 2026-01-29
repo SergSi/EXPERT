@@ -1,8 +1,8 @@
 {
   "created_at": "",
-  "last_updated": "2026-01-26T18:33:25.633064",
-  "total_sections": 222,
-  "total_documents": 14,
+  "last_updated": "2026-01-27T12:59:11.150155",
+  "total_sections": 245,
+  "total_documents": 20,
   "by_folder": {
     "normative": {
       "documents": 8,
@@ -21,16 +21,16 @@
       }
     },
     "structured": {
-      "documents": 3,
-      "sections": 24,
-      "words": 43145,
+      "documents": 9,
+      "sections": 47,
+      "words": 84692,
       "formats": {
-        ".txt": 24
+        ".txt": 47
       }
     }
   },
   "format_stats": {
-    ".txt": 203,
+    ".txt": 226,
     ".md": 19
   },
   "supported_extensions": [

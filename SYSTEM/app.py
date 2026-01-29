@@ -9,10 +9,34 @@ import pandas as pd
 from datetime import datetime
 import uuid
 import streamlit as st
+import shutil
+import tempfile
 
 # ==============================================
-# КОНФИГУРАЦИЯ ПАПОК И ТИПОВ ДОКУМЕНТОВ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ КОНФИГУРАЦИИ
 # ==============================================
+
+def get_default_config():
+    """Возвращает конфигурацию по умолчанию"""
+    project_dir = Path(__file__).parent
+    project_dir.mkdir(exist_ok=True)
+    
+    return {
+        "folders": {
+            "normative": str(project_dir / "NORMATIVE"),
+            "methodology": str(project_dir / "METHODOLOGY"),
+            "structured": str(project_dir / "STRUCTURED"),
+            "expertise": str(project_dir / "EXPERTISE")
+        },
+        "database_path": str(project_dir / "knowledge_database.db"),
+        "sessions_path": str(project_dir / "sessions"),
+        "default_prompt": str(project_dir / "default_prompt.txt"),
+        "supported_extensions": [".md", ".txt"],
+        "admin_enabled": True,
+        "allow_database_export": True,
+        "allow_database_import": True,
+        "max_upload_size_mb": 100
+    }
 
 def load_config():
     """
@@ -27,37 +51,26 @@ def load_config():
                 config = json.load(f)
                 print(f"✅ Конфигурация загружена из {config_path}")
                 
-                # Проверяем обязательные ключи
-                required_keys = ["folders", "database_path", "templates_path"]
-                for key in required_keys:
+                # Проверяем и добавляем отсутствующие ключи
+                default_config = get_default_config()
+                for key, value in default_config.items():
                     if key not in config:
-                        print(f"⚠ В конфигурации отсутствует ключ: {key}")
+                        print(f"⚠ В конфигурации отсутствует ключ: {key}. Используется значение по умолчанию.")
+                        config[key] = value
                 
                 return config
         except json.JSONDecodeError as e:
             print(f"❌ Ошибка в формате JSON (строка {e.lineno}, позиция {e.pos}): {e.msg}")
+            print("⚠ Используются значения по умолчанию.")
+            return get_default_config()
         except Exception as e:
             print(f"❌ Ошибка загрузки конфигурации: {e}")
+            print("⚠ Используются значения по умолчанию.")
+            return get_default_config()
     
     # Конфигурация по умолчанию если файл не найден или поврежден
-    print("⚠ Файл config.json не найден или поврежден. Используются значения по умолчанию.")
-    
-    # Создаем папку проекта
-    project_dir = Path(__file__).parent
-    project_dir.mkdir(exist_ok=True)
-    
-    return {
-        "folders": {
-            "normative": str(project_dir / "NORMATIVE"),
-            "methodology": str(project_dir / "METHODOLOGY"),
-            "structured": str(project_dir / "STRUCTURED"),
-            "expertise": str(project_dir / "EXPERTISE")
-        },
-        "database_path": str(project_dir / "knowledge_database.db"),
-        "templates_path": str(project_dir / "templates.json"),
-        "expert_sessions_path": str(project_dir / "expert_sessions"),
-        "supported_extensions": [".md", ".txt"]  # Убрано .rtf
-    }
+    print("⚠ Файл config.json не найден. Используются значения по умолчанию.")
+    return get_default_config()
 
 def save_config(config):
     """
@@ -113,8 +126,75 @@ def create_default_folders(folders_config):
                     print(f"❌ Не удалось создать папку {folder_path}: {e}")
     return created
 
+def load_default_prompt():
+    """
+    Загружает стандартный промт из файла или возвращает дефолтный.
+    """
+    # Получаем путь из конфигурации или используем путь по умолчанию
+    prompt_path_str = CONFIG.get("default_prompt", "")
+    
+    if prompt_path_str:
+        prompt_path = Path(prompt_path_str)
+    else:
+        # Если путь не указан в конфигурации, используем путь по умолчанию
+        project_dir = Path(__file__).parent
+        prompt_path = project_dir / "default_prompt.txt"
+    
+    # Создаем директорию если не существует
+    prompt_path.parent.mkdir(exist_ok=True, parents=True)
+    
+    if prompt_path.exists():
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if content.strip():  # Проверяем, что файл не пустой
+                    print(f"✅ Стандартный промт загружен из {prompt_path}")
+                    return content
+                else:
+                    print(f"⚠ Файл промта пуст: {prompt_path}")
+        except Exception as e:
+            print(f"❌ Ошибка чтения стандартного промта: {e}")
+    else:
+        print(f"⚠ Файл промта не найден: {prompt_path}")
+    
+    # Дефолтный промт если файл не найден или пуст
+    default_prompt_content = """Ты — эксперт в области землепользования и кадастра.
+
+ИСПОЛЬЗУЙ ТОЛЬКО информацию из приложенных материалов:
+1. 📚 materials.json - нормативные документы и разделы
+2. 📎 файлы в папке attachments - дополнительные документы
+
+НЕ используй свои знания или внешние источники.
+
+СТРУКТУРА ОТВЕТА:
+1. КРАТКИЙ ОТВЕТ: Основной вывод (2-3 предложения)
+2. НОРМАТИВНАЯ БАЗА: Список использованных документов из materials.json
+3. АНАЛИЗ: Подробный анализ на основе всех материалов
+4. ВЫВОДЫ: Пронумерованные выводы
+5. РЕКОМЕНДАЦИИ: Конкретные действия
+6. НЕДОСТАТОЧНЫЕ СВЕДЕНИЯ: Что отсутствует для полного ответа
+
+ОТВЕТ ЭКСПЕРТА:"""
+    
+    # Пытаемся создать файл с дефолтным промтом
+    try:
+        with open(prompt_path, 'w', encoding='utf-8') as f:
+            f.write(default_prompt_content)
+        print(f"✅ Создан файл с дефолтным промтом: {prompt_path}")
+    except Exception as e:
+        print(f"⚠ Не удалось создать файл промта: {e}")
+    
+    return default_prompt_content
+
+# ==============================================
+# ЗАГРУЗКА КОНФИГУРАЦИИ И ИНИЦИАЛИЗАЦИЯ
+# ==============================================
+
 # Загружаем конфигурацию
 CONFIG = load_config()
+
+# Загружаем стандартный промт
+DEFAULT_PROMPT = load_default_prompt()
 
 # Получаем список поддерживаемых расширений
 SUPPORTED_EXTENSIONS = CONFIG.get("supported_extensions", [".md", ".txt"])
@@ -134,10 +214,6 @@ if not folder_status["all_exist"]:
     for folder_type, path in folder_status["missing"]:
         print(f"   - {folder_type}: {path}")
     print("ℹ️ Проверьте пути в файле config.json")
-
-# Создаем папку для сессий эксперта
-expert_sessions_path = Path(CONFIG.get("expert_sessions_path", "./expert_sessions"))
-expert_sessions_path.mkdir(exist_ok=True, parents=True)
 
 # ==============================================
 # КЛАСС ДЛЯ РАБОТЫ С РАЗНЫМИ ФОРМАТАМИ ФАЙЛОВ
@@ -221,143 +297,6 @@ class FileFormatReader:
             return None
 
 # ==============================================
-# СИСТЕМА УПРАВЛЕНИЯ ШАБЛОНАМИ ВОПРОСОВ
-# ==============================================
-
-class TemplateManager:
-    """Управление шаблонами вопросов для ИИ"""
-    
-    def __init__(self):
-        self.templates_path = Path(CONFIG["templates_path"])
-        self.templates = self._load_templates()
-    
-    def _load_templates(self) -> Dict:
-        """Загружаем шаблоны из файла"""
-        # Если файл существует, пытаемся его прочитать
-        if self.templates_path.exists():
-            try:
-                with open(self.templates_path, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                    if content:  # Проверяем, что файл не пустой
-                        templates = json.loads(content)
-                        
-                        # Проверка структуры
-                        if not isinstance(templates, dict):
-                            print(f"❌ Неверный формат: templates должен быть словарем, а не {type(templates).__name__}")
-                            raise ValueError("Неправильный формат данных")
-                        
-                        if "templates" not in templates:
-                            print(f"❌ Неверная структура: отсутствует ключ 'templates'")
-                            raise ValueError("Отсутствует ключ 'templates'")
-                        
-                        if not isinstance(templates["templates"], list):
-                            print(f"❌ Неверная структура: 'templates' должен быть списком")
-                            raise ValueError("'templates' должен быть списком")
-                        
-                        print(f"✅ Шаблоны загружены из файла: {self.templates_path}")
-                        print(f"✅ Загружено {len(templates['templates'])} шаблонов")
-                        return templates
-                    
-            except json.JSONDecodeError as e:
-                print(f"❌ Ошибка JSON в файле шаблонов: {e}")
-                print(f"❌ Строка с ошибкой: {e.doc}")
-                print(f"❌ Позиция ошибки: {e.pos}")
-                
-            except ValueError as e:
-                print(f"❌ Ошибка структуры файла: {e}")
-                
-            except Exception as e:
-                print(f"❌ Ошибка загрузки шаблонов: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        # Создаем стандартные шаблоны только если файла нет или он пустой/битый
-        print("📝 Создаю дефолтные шаблоны...")
-        default_templates = self._get_default_templates()
-        
-        # Сохраняем дефолтные шаблоны ТОЛЬКО если файла не существует
-        if not self.templates_path.exists():
-            self._save_templates(default_templates)
-        
-        return default_templates
-    
-    def _get_default_templates(self) -> Dict:
-        """Возвращает дефолтные шаблоны"""
-        return {
-            "templates": [
-                {
-                    "id": "analytical_report",
-                    "name": "📊 Аналитический отчет",
-                    "description": "Аналитический отчет с детальным анализом нормативной базы и практическими рекомендациями",
-                    "prompt": "Ты — старший эксперт-аналитик в области землепользования, кадастра и градостроительного регулирования.\n\nОСНОВНОЕ ПРАВИЛО: Используй информацию ТОЛЬКО из предоставленных материалов.\n\nВАЖНО:\n- Каждое утверждение должно подтверждаться предоставленными материалами\n- Если информации недостаточно — прямо указывай на это\n- Если в материалах отсутствуют нужные сведения, укажи КАКИЕ ИМЕННО дополнительные материалы необходимы\n- Не используй внешние знания\n\nСТРУКТУРА ОТВЕТА:\n1. КРАТКИЙ ОТВЕТ: Основной вывод в 2-3 предложениях\n2. НОРМАТИВНАЯ БАЗА: Ключевые документы из материалов\n3. АНАЛИЗ: Связь норм с вопросю на основе материалов\n4. ВЫВОДЫ: Пронумерованные выводы из материалов\n5. РЕКОМЕНДАЦИИ: Конкретные действия, обоснованные материалами\n6. НЕДОСТАЮЩИЕ МАТЕРИАЛЫ (если требуется): Какие именно документы или сведения отсутствуют\n\nОТВЕТ ЭКСПЕРТА-АНАЛИТИКА:"
-                },
-                {
-                    "id": "brief_qa",
-                    "name": "⚡ Краткий ответ с рекомендациями",
-                    "description": "Краткий формат: вопрос своими словами, прямой ответ и конкретные рекомендации",
-                    "prompt": "Ты — эксперт в области землепользования и кадастра.\n\nИспользуй информацию ТОЛЬКО из предоставленных материалов.\n\nВАЖНО:\n- Все выводы должны быть основаны ТОЛЬКО на предоставленных материалах\n- Если информации недостаточно — укажи это явно\n- Если нужные сведения отсутствуют, перечисли КАКИЕ ИМЕННО материалы требуются\n\nПодготовь краткий ответ по структуре:\n1. ВОПРОС (СВОИМИ СЛОВАМИ): Переформулировка на основе материалов\n2. ПРЯМОЙ ОТВЕТ: Краткий ответ с обоснованием из материалов\n3. РЕКОМЕНДАЦИИ: конкретные рекомендации, обоснованные материалами\n4. НЕДОСТАЮЩАЯ ИНФОРМАЦИЯ (если есть): Что именно отсутствует в материалах\n\nОТВЕТ ЭКСПЕРТА:"
-                },
-                {
-                    "id": "standard",
-                    "name": "📝 Стандартный ответ",
-                    "description": "Развернутый профессиональный ответ с анализом",
-                    "prompt": "Ты — эксперт в области землепользования и кадастра.\n\nНа основе предоставленных материалов подготовь развернутый профессиональный ответ.\n\nИНСТРУКЦИЯ:\n1. Проанализируй все предоставленные материалы\n2. Используй информацию ТОЛЬКО из предоставленных материалов\n3. Если информации недостаточно — укажи это явно\n4. Если отсутствуют нужные сведения, перечисли КАКИЕ ИМЕННО документы или данные необходимы\n5. Не используй внешние знания или предположения\n\nСТРУКТУРА ОТВЕТА:\n1. ПОВТОРЕНИЕ ВОПРОСА: Сформулируй исходный вопрос своими словами, показывая правильное понимание и задавая рамки анализа\n2. Краткий ответ: 2-3 предложения с дословным ответом\n3. Детальный ответ с анализом (только на основе материалов)\n4. Практические рекомендации (обоснованные материалами)\n5. Выводы\n6. НЕДОСТАЮЩИЕ СВЕДЕНИЯ (при необходимости): Конкретный перечень того, чего не хватает в материалах\n\nОТВЕТ ЭКСПЕРТА:"
-                },
-                {
-                    "id": "detailed_with_gaps",
-                    "name": "🔍 Детальный анализ с выявлением пробелов",
-                    "description": "Детальный анализ с выявлением недостающих сведений и рекомендациями по их получение",
-                    "prompt": "Ты — старший эксперт-аналитик в области землепользования и кадастра.\n\nОСНОВНОЕ ПРАВИЛО: Используй информацию ТОЛЬКО из предоставленных материалов.\n\nКРИТИЧЕСКИ ВАЖНО:\n1. Все выводы должны быть подтверждены материалами\n2. Если информация отсутствует или недостаточна — укажи это ЧЕТКО\n3. Перечисли КОНКРЕТНО какие документы/данные нужны\n4. Никаких предположений и внешних знаний\n\nСТРУКТУРА ОТВЕТА:\n1. КРАТКАЯ СВОДКА: Суть вопроса и общий вывод\n2. ИМЕЮЩИЕСЯ МАТЕРИАЛЫ: Что есть в документах\n3. АНАЛИЗ НА ОСНОВЕ МАТЕРИАЛОВ: Что можно сказать на основе имеющегося\n4. ПРОБЕЛЫ И НЕДОСТАТКИ: Чего не хватает для полного ответа\n5. КОНКРЕТНЫЕ НЕДОСТАЮЩИЕ МАТЕРИАЛЫ: Список необходимых документов/данных\n6. ВЫВОДЫ И РЕКОМЕНДАЦИИ (на основе имеющегося)\n\nОТВЕТ ЭКСПЕРТА:"
-                }
-            ],
-            "default_template": "standard",
-            "last_updated": datetime.now().isoformat()
-        }
-    
-    def _save_templates(self, templates: Dict):
-        """Сохраняем шаблоны в файл"""
-        try:
-            self.templates_path.parent.mkdir(exist_ok=True, parents=True)
-            with open(self.templates_path, 'w', encoding='utf-8') as f:
-                json.dump(templates, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Ошибка сохранения шаблонов: {e}")
-    
-    def get_templates_list(self) -> List[Dict]:
-        """Возвращает список доступных шаблонов"""
-        return self.templates.get("templates", [])
-    
-    def get_template_by_id(self, template_id: str) -> Optional[Dict]:
-        """Возвращает шаблон по ID"""
-        for template in self.templates.get("templates", []):
-            if template.get("id") == template_id:
-                return template
-        return None
-    
-    def get_default_template(self) -> Dict:
-        """Возвращает шаблон по умолчанию"""
-        default_id = self.templates.get("default_template", "standard")
-        template = self.get_template_by_id(default_id)
-        if template:
-            return template
-        else:
-            # Если шаблон по умолчанию не найден, берем первый из списка
-            templates_list = self.get_templates_list()
-            if templates_list:
-                return templates_list[0]
-            # Если вообще нет шаблонов, возвращаем пустой
-            return {"id": "empty", "name": "Пустой", "description": "", "prompt": ""}
-    
-    def update_templates(self, new_templates: Dict):
-        """Обновляет шаблоны и сохраняет в файл"""
-        self.templates = new_templates
-        self._save_templates(new_templates)
-    
-    def reload_templates(self):
-        """Перезагружает шаблоны из файла"""
-        self.templates = self._load_templates()
-
-# ==============================================
 # СИСТЕМА УПРАВЛЕНИЯ БАЗОЙ РАЗДЕЛОВ
 # ==============================================
 
@@ -435,22 +374,19 @@ class SimpleSectionDatabase:
         
         cleaned_text = text
         
-        # 1. Удаляем строки, начинающиеся с КонсультантПлюс примечаний (из вашего примера)
+        # 1. Удаляем строки, начинающиеся с КонсультантПлюс примечаний
         consultant_patterns = [
-            r'КонсультантПлюс: примечание\.[^\n]*\n',  # Однострочные
-            r'\[Консультант[^\]]*примечание[^\]]*\][^\n]*\n',  # В квадратных скобках
+            r'КонсультантПлюс: примечание\.[^\n]*\n',
+            r'\[Консультант[^\]]*примечание[^\]]*\][^\n]*\n',
         ]
         
         for pattern in consultant_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
         
-        # 2. Удаляем блоки ГАРАНТ (многострочные с сохранением структуры закона)
-        # ТОЧЕЧНО ДОБАВЛЕНО: очистка служебных отметок ГАРАНТ
+        # 2. Удаляем блоки ГАРАНТ
         garant_patterns = [
-            # Блок "ГАРАНТ:" с последующим текстом до начала статьи/пункта
             r'ГАРАНТ:\s*\n\s*См\. [^\n]*\n',
             r'ГАРАНТ:\s*\n\s*[^\n]*См\. [^\n]*\n',
-            # Строки со "См." внутри блока ГАРАНТ
             r'^\s*См\.\s+Энциклопедии[^\n]*\n',
             r'^\s*См\.\s+схему[^\n]*\n',
             r'^\s*См\.\s+позиции[^\n]*\n',
@@ -461,8 +397,7 @@ class SimpleSectionDatabase:
         for pattern in garant_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
         
-        # 3. Удаляем информационные блоки об измененияи (без удаления самого текста)
-        # ТОЧЕЧНО ДОБАВЛЕНО: только заголовки блоков изменений
+        # 3. Удаляем информационные блоки об изменениях
         change_info_patterns = [
             r'Информация об изменениях:\s*\n',
             r'Изменения вступают в силу[^\n]*\n',
@@ -472,17 +407,17 @@ class SimpleSectionDatabase:
         for pattern in change_info_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
         
-        # 4. Удаляем другие служебные пометки (из вашего примера)
+        # 4. Удаляем другие служебные пометки
         service_patterns = [
-            r'С \d{2}\.\d{2}\.\d{4}[^\n]*\n',  # Даты изменений
-            r'<\d+>',  # Встроенные сноски
-            r'--------------------------------\s*\n<[0-9]+>.*?\n',  # Номерные сноски
+            r'С \d{2}\.\d{2}\.\d{4}[^\n]*\n',
+            r'<\d+>',
+            r'--------------------------------\s*\n<[0-9]+>.*?\n',
         ]
         
         for pattern in service_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.DOTALL)
         
-        # 5. Удаляем простые юридические пометки (из вашего кода)
+        # 5. Удаляем простые юридические пометки
         legal_patterns = [
             r'\(в ред\. [^)]*\)',
             r'\(введена [^)]*\)',
@@ -493,8 +428,7 @@ class SimpleSectionDatabase:
         for pattern in legal_patterns:
             cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE)
         
-        # 6. ТОЧЕЧНО ДОБАВЛЕНО: удаляем строки с конкретными служебными фразами ГАРАНТ
-        # (сохраняя при этом текст самого закона)
+        # 6. Удаляем строки с конкретными служебными фразами ГАРАНТ
         lines = cleaned_text.split('\n')
         cleaned_lines = []
         
@@ -509,7 +443,6 @@ class SimpleSectionDatabase:
                 continue
             
             # Проверяем, является ли строка служебной пометкой ГАРАНТ
-            # (но не частью текста закона)
             is_garant_service_line = (
                 line_stripped.startswith('ГАРАНТ:') or
                 line_stripped.startswith('См. ') or
@@ -519,23 +452,21 @@ class SimpleSectionDatabase:
                 'Пункт' in line_stripped and 'изменен' in line_stripped and not line_stripped.startswith('Пункт 1.') or
                 'Статья' in line_stripped and ('дополнена' in line_stripped or 'изменена' in line_stripped) and not line_stripped.startswith('Статья 1.') or
                 line_stripped == 'Информация об изменениях:' or
-                'консультант' in line_stripped.lower()  # Ваше требование
+                'консультант' in line_stripped.lower()
             )
             
             # Если это служебная строка ГАРАНТ, пропускаем ее
             if is_garant_service_line:
-                # Если это строка "ГАРАНТ:", возможно, следующая строка тоже служебная
                 if line_stripped.startswith('ГАРАНТ:'):
                     skip_next_line = True
                 continue
             
-            # Сохраняем строку (это текст закона или значимый контент)
+            # Сохраняем строку
             cleaned_lines.append(line)
         
         cleaned_text = '\n'.join(cleaned_lines)
         
-        # 7. Удаляем пустые строки, которые могли образоваться после удаления служебных блоков
-        # ТОЧЕЧНО ДОБАВЛЕНО: более аккуратная обработка пустых строк
+        # 7. Удаляем пустые строки
         lines = cleaned_text.split('\n')
         cleaned_lines = []
         previous_was_empty = False
@@ -545,11 +476,9 @@ class SimpleSectionDatabase:
             
             if not line_stripped:
                 if not previous_was_empty:
-                    cleaned_lines.append('')  # Оставляем одну пустую строку для разделения
+                    cleaned_lines.append('')
                     previous_was_empty = True
             else:
-                # Проверяем, не является ли строка остатком служебной информации
-                # после предыдущей очистки
                 if not (line_stripped.startswith('N ') or 
                        re.match(r'^N\s+\d+', line_stripped) or
                        line_stripped.startswith('Изменен') and 'г.' in line_stripped):
@@ -558,51 +487,38 @@ class SimpleSectionDatabase:
         
         cleaned_text = '\n'.join(cleaned_lines)
         
-        # 8. Финализация (из вашего примера)
-        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)  # Множественные переносы
-        cleaned_text = cleaned_text.strip()  # Убираем пробелы по краям
+        # 8. Финализация
+        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
+        cleaned_text = cleaned_text.strip()
         
         return cleaned_text
     
     def _clean_special_characters(self, text: str) -> str:
-        """Очищает текст от специальных символов и форматирования, убирает лишние пустые строки"""
+        """Очищает текст от специальных символов и форматирования"""
         if not text:
             return text
         
-        # Удаляем множественные пробелы и табуляции
         cleaned = re.sub(r'[ \t]+', ' ', text)
-        
-        # Удаляем символы мягких переносов и другие специальные символы
-        cleaned = cleaned.replace('\xad', '')  # мягкий перенос
-        cleaned = cleaned.replace('\xa0', ' ')  # неразрывный пробел
-        
-        # Удаляем скрытые символы форматирования
+        cleaned = cleaned.replace('\xad', '')
+        cleaned = cleaned.replace('\xa0', ' ')
         cleaned = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned)
-        
-        # Удаляем множественные переносы строк (оставляем максимум 2 подряд)
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-        
-        # Удаляем пустые строки в начале и конце
         cleaned = cleaned.strip()
-        
-        # Заменяем множественные пробелы на один
         cleaned = re.sub(r' +', ' ', cleaned)
         
-        # Удаляем пробелы в начале и конце каждой строки
         lines = cleaned.split('\n')
         cleaned_lines = []
         for line in lines:
             line = line.strip()
-            if line:  # добавляем только непустые строки
+            if line:
                 cleaned_lines.append(line)
         
-        # Собираем обратно с нормальными переносами строк
         cleaned = '\n'.join(cleaned_lines)
         
         return cleaned
     
     def _extract_yaml_metadata(self, content: str) -> Dict:
-        """Извлекает метаданные из YAML заголовка в начале документа"""
+        """Извлекает метаданные из YAML заголовка"""
         metadata = {}
         
         try:
@@ -626,11 +542,9 @@ class SimpleSectionDatabase:
         try:
             self.db_path.mkdir(exist_ok=True, parents=True)
             
-            # Сохраняем разделы
             with open(self.sections_db, 'w', encoding='utf-8') as f:
                 json.dump(self.sections, f, ensure_ascii=False, indent=2)
             
-            # Сохраняем метаданные
             with open(self.metadata_db, 'w', encoding='utf-8') as f:
                 json.dump(self.metadata, f, ensure_ascii=False, indent=2)
             
@@ -647,20 +561,17 @@ class SimpleSectionDatabase:
         if not sections:
             return self._create_default_metadata()
         
-        # Подсчет уникальных документов
         unique_documents = set()
         folder_stats = {}
         format_stats = {}
         
         for section in sections:
-            # Подсчет уникальных документов
             doc_path = section.get("document_path", "")
             doc_name = section.get("document", "")
             if doc_path or doc_name:
                 doc_key = f"{doc_path}_{doc_name}"
                 unique_documents.add(doc_key)
             
-            # Статистика по папкам
             folder = section.get("folder", "unknown")
             if folder not in folder_stats:
                 folder_stats[folder] = {
@@ -670,24 +581,19 @@ class SimpleSectionDatabase:
                     "formats": {}
                 }
             
-            # Добавляем документ в статистику папки
             if doc_path or doc_name:
                 folder_stats[folder]["documents"].add(doc_key)
             
-            # Подсчет разделов и слов
             folder_stats[folder]["sections"] += 1
             folder_stats[folder]["words"] += section.get("word_count", 0)
             
-            # Статистика по форматам внутри папки
             ext = section.get("document_extension", ".txt").lower()
             if ext not in folder_stats[folder]["formats"]:
                 folder_stats[folder]["formats"][ext] = 0
             folder_stats[folder]["formats"][ext] += 1
             
-            # Общая статистика по форматам
             format_stats[ext] = format_stats.get(ext, 0) + 1
         
-        # Преобразуем статистику по папкам в нужный формат
         by_folder_formatted = {}
         for folder, stats in folder_stats.items():
             by_folder_formatted[folder] = {
@@ -697,7 +603,6 @@ class SimpleSectionDatabase:
                 "formats": stats["formats"]
             }
         
-        # Получаем created_at из существующих метаданных или используем текущее время
         created_at = self.metadata.get("created_at", datetime.now().isoformat())
         
         return {
@@ -726,35 +631,27 @@ class SimpleSectionDatabase:
             folder = Path(folder_path)
             print(f"\n📁 Сканируем: {folder} ({folder_name})")
             
-            # Ищем файлы ВСЕХ поддерживаемых форматов
             files = []
             for ext in SUPPORTED_EXTENSIONS:
                 files.extend(list(folder.rglob(f"*{ext}")))
             
-            folder_sections = 0
             folder_documents = len(files)
+            folder_sections = 0
             
             for file_path in files:
                 print(f"  📄 {file_path.name} ({file_path.suffix})...", end="")
                 
                 try:
-                    # Используем универсальный ридер файлов
                     content = self.file_reader.read_file(file_path)
                     
                     if content is None:
                         print(f" ❌ Не удалось прочитать файл")
                         continue
                     
-                    # Извлекаем метаданные из YAML заголовка
                     metadata = self._extract_yaml_metadata(content)
-                    
-                    # Получаем название документа из метаданных или имени файла
                     document_title = metadata.get('title', file_path.stem)
-                    
-                    # ОЧИЩАЕМ ТЕКСТ ОТ СЛУЖЕБНЫХ СИМВОЛОВ
                     cleaned_content = self._clean_special_characters(content)
                     
-                    # РАЗБИВАЕМ ДОКУМЕНТ НА РАЗДЕЛЫ В ЗАВИСИМОСТИ ОТ ТИПА ПАПКИ
                     sections = self._split_document_by_type(
                         cleaned_content,
                         file_path, 
@@ -765,9 +662,7 @@ class SimpleSectionDatabase:
                     print(f" → {len(sections)} разделов")
                     folder_sections += len(sections)
                     
-                    # Добавляем разделы в общий список
                     for i, section in enumerate(sections):
-                        # ОЧИЩАЕМ КОНТЕНТ КАЖДОГО РАЗДЕЛА ОТ КОММЕНТАРИЕВ
                         section_content = section.get("content", "")
                         final_content = self._clean_text_from_comments(section_content)
                         
@@ -797,13 +692,9 @@ class SimpleSectionDatabase:
                 "sections": folder_sections
             }
         
-        # Обновляем базу
         self.sections = all_sections
-        
-        # Пересчитываем метаданные на основе фактических данных
         self.metadata = self._recalculate_metadata(all_sections)
         
-        # Сохраняем
         success = self.save_database()
         
         if success:
@@ -812,7 +703,6 @@ class SimpleSectionDatabase:
             print(f"   Всего разделов: {self.metadata['total_sections']}")
             print(f"   Дата обновления: {self.metadata['last_updated']}")
             
-            # Статистика по форматам
             if 'format_stats' in self.metadata:
                 print(f"   Форматы документов:")
                 for ext, count in self.metadata['format_stats'].items():
@@ -822,7 +712,6 @@ class SimpleSectionDatabase:
                     }.get(ext, ext)
                     print(f"     {format_name}: {count} документов")
             
-            # Статистика по папкам
             if 'by_folder' in self.metadata:
                 print(f"   Распределение по папкам:")
                 for folder_name, stats in self.metadata['by_folder'].items():
@@ -855,7 +744,7 @@ class SimpleSectionDatabase:
             }]
     
     def _split_normative_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Разделение нормативных документов по 'ГЛАВА' или 'Глава' с номером"""
+        """Разделение нормативных документов"""
         sections = []
         
         if not content:
@@ -876,7 +765,6 @@ class SimpleSectionDatabase:
         current_title = doc_title
         current_type = "document"
         
-        # Паттерны для поиска глав (ТОЛЬКО ГЛАВА, без Статей)
         patterns = [
             (r'^ГЛАВА\s+[IVXLCDM\d]+[\s\.\-:].*$', "chapter"),
             (r'^Глава\s+[IVXLCDM\d]+[\s\.\-:].*$', "chapter"),
@@ -922,7 +810,7 @@ class SimpleSectionDatabase:
         return sections
     
     def _split_methodology_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Разделение методических документов на заголовки 1 и 2 уровня markdown"""
+        """Разделение методических документов"""
         sections = []
         
         if not content:
@@ -986,7 +874,7 @@ class SimpleSectionDatabase:
         return sections
     
     def _split_structured_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Разделение структурированных документов по квадратным скобкам"""
+        """Разделение структурированных документов"""
         sections = []
         
         if not content:
@@ -1007,20 +895,16 @@ class SimpleSectionDatabase:
         current_title = doc_title
         current_type = "document"
         
-        # Паттерн для поиска заголовков в квадратных скобках
         bracket_pattern = r'^\[([^\[\]]+)\]$'
         
         for line in lines:
             line_stripped = line.strip()
             is_header = False
             
-            # Проверяем, является ли строка заголовком в квадратных скобках
             match = re.match(bracket_pattern, line_stripped)
             if match:
                 header_content = match.group(1).strip()
                 
-                # Дополнительная проверка: заголовок должен быть не слишком длинным
-                # и содержать осмысленный текст (не только цифры или служебные символы)
                 if (len(header_content) > 3 and 
                     len(header_content) <= 200 and
                     re.search(r'[А-Яа-яЁёA-Za-z]', header_content)):
@@ -1057,7 +941,7 @@ class SimpleSectionDatabase:
         return sections
     
     def _split_expertise_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Экспертные документы сохраняем полностью без разделения"""
+        """Экспертные документы сохраняем полностью"""
         
         if not content:
             return [{
@@ -1079,7 +963,7 @@ class SimpleSectionDatabase:
         }]
     
     def get_sections_for_display(self) -> List[Dict]:
-        """Возвращает разделы для отображения с удобной структурой"""
+        """Возвращает разделы для отображения"""
         display_data = []
         
         for section in self.sections:
@@ -1089,28 +973,23 @@ class SimpleSectionDatabase:
             doc_ext = section.get("document_extension", ".txt")
             doc_title = section.get("document_title", doc_file)
             section_title = section.get("title", doc_title)
-            section_type = section.get("section_type", "text")
             content = section.get("content", "")
             word_count = section.get("word_count", 0)
             selected = section.get("selected", False)
             scan_date = section.get("scan_date", "")
             
-            # Сокращаем заголовок для отображения
             short_doc_title = doc_title[:40] + "..." if len(doc_title) > 40 else doc_title
             short_section_title = section_title[:60] + "..." if len(section_title) > 60 else section_title
             
-            # Добавляем квадратные скобки для структурированных документов
             if folder == "structured" and not section_title.startswith("["):
                 short_section_title = f"[{short_section_title}]"
                 section_title = f"[{section_title}]"
             
-            # Добавляем иконку формата
             format_icon = {
                 ".md": "📝",
                 ".txt": "📄"
             }.get(doc_ext.lower(), "📎")
             
-            # Добавляем информацию о дате сканирования если есть
             date_info = ""
             if scan_date:
                 try:
@@ -1128,7 +1007,7 @@ class SimpleSectionDatabase:
                 "extension": doc_ext,
                 "section": short_section_title,
                 "section_full": section_title,
-                "type": section_type,
+                "type": section.get("section_type", "text"),
                 "words": word_count,
                 "selected": selected,
                 "content_full": content,
@@ -1173,62 +1052,89 @@ class SimpleSectionDatabase:
         
         return cleared_count
     
-    def import_database(self, import_data: Dict) -> bool:
-        """Импортирует базу данных с пересчетом метаданных"""
+    def export_selected_to_json(self, output_path: Path) -> bool:
+        """
+        Экспортирует выбранные разделы в JSON файл
+        
+        Args:
+            output_path: Путь для сохранения JSON файла
+            
+        Returns:
+            bool: Успешность экспорта
+        """
         try:
-            if 'sections' not in import_data:
-                print("❌ Ошибка импорта: отсутствует ключ 'sections' в импортируемых данных")
+            selected_sections = self.get_selected_sections()
+            
+            if not selected_sections:
+                print("⚠ Нет выбранных разделов для экспорта")
                 return False
             
-            # Сохраняем старые данные для возможного отката
-            old_sections = self.sections.copy()
-            old_metadata = self.metadata.copy()
+            # Формируем структуру данных для экспорта
+            export_data = {
+                "metadata": {
+                    "export_date": datetime.now().isoformat(),
+                    "total_sections": len(selected_sections),
+                    "source": "Expert System App",
+                    "version": "1.0"
+                },
+                "sections": []
+            }
             
-            try:
-                # Импортируем разделы
-                self.sections = import_data['sections']
-                print(f"✅ Импортировано {len(self.sections)} разделов")
+            # Группируем по папкам для статистики
+            folder_stats = {}
+            total_words = 0
+            
+            for section in selected_sections:
+                folder = section.get("folder", "unknown")
+                if folder not in folder_stats:
+                    folder_stats[folder] = 0
+                folder_stats[folder] += 1
                 
-                # Пересчитываем метаданные на основе импортированных данных
-                self.metadata = self._recalculate_metadata(self.sections)
+                word_count = section.get("word_count", 0)
+                total_words += word_count
                 
-                # Если в импортируемых данных есть метаданные, сохраняем created_at
-                if 'metadata' in import_data and import_data['metadata']:
-                    imported_metadata = import_data['metadata']
-                    # Сохраняем оригинальную дату создания если она есть
-                    if 'created_at' in imported_metadata and imported_metadata['created_at']:
-                        self.metadata['created_at'] = imported_metadata['created_at']
+                # Форматируем заголовок для структурированных документов
+                section_title = section.get("title", "")
+                if folder == "structured" and not section_title.startswith("["):
+                    section_title = f"[{section_title}]"
                 
-                # Сохраняем базу
-                save_success = self.save_database()
-                
-                if save_success:
-                    print(f"✅ Метаданные пересчитаны:")
-                    print(f"   - Всего разделов: {self.metadata['total_sections']}")
-                    print(f"   - Всего документов: {self.metadata['total_documents']}")
-                    print(f"   - Последнее обновление: {self.metadata['last_updated']}")
-                    
-                    # Выводим статистику по папкам
-                    if 'by_folder' in self.metadata:
-                        for folder, stats in self.metadata['by_folder'].items():
-                            print(f"   - 📁 {folder}: {stats.get('documents', 0)} док., {stats.get('sections', 0)} разд.")
-                    
-                    return True
-                else:
-                    print("❌ Ошибка сохранения базы после импорта")
-                    return False
-                
-            except Exception as import_error:
-                # Восстанавливаем старые данные при ошибке
-                print(f"❌ Ошибка импорта: {import_error}")
-                print("🔄 Восстанавливаю предыдущие данные...")
-                self.sections = old_sections
-                self.metadata = old_metadata
-                self.save_database()
-                return False
-                
+                export_data["sections"].append({
+                    "id": section.get("id"),
+                    "folder": folder,
+                    "document": section.get("document", ""),
+                    "document_title": section.get("document_title", section.get("document", "")),
+                    "document_extension": section.get("document_extension", ".txt"),
+                    "document_path": section.get("document_path", ""),
+                    "section_title": section_title,
+                    "content": section.get("content", ""),
+                    "section_type": section.get("section_type", "text"),
+                    "word_count": word_count,
+                    "metadata": section.get("metadata", {}),
+                    "scan_date": section.get("scan_date", "")
+                })
+            
+            # Добавляем статистику
+            export_data["statistics"] = {
+                "total_words": total_words,
+                "average_words_per_section": round(total_words / len(selected_sections), 1),
+                "by_folder": folder_stats
+            }
+            
+            # Создаем папку если не существует
+            output_path.parent.mkdir(exist_ok=True, parents=True)
+            
+            # Сохраняем в JSON
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"✅ Экспортировано {len(selected_sections)} разделов в {output_path}")
+            print(f"   Всего слов: {total_words}")
+            print(f"   Распределение по папкам: {folder_stats}")
+            
+            return True
+            
         except Exception as e:
-            print(f"❌ Критическая ошибка импорта: {e}")
+            print(f"❌ Ошибка экспорта в JSON: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -1243,7 +1149,6 @@ class SimpleSectionDatabase:
             "formats_summary": {}
         }
         
-        # Считаем статистику по папкам
         folder_stats = {}
         for section in self.sections:
             folder = section.get("folder", "unknown")
@@ -1254,11 +1159,9 @@ class SimpleSectionDatabase:
             if section.get("selected", False):
                 folder_stats[folder]["selected"] += 1
             
-            # Добавляем документ
             doc_key = f"{section.get('document_path', '')}_{section.get('document', '')}"
             folder_stats[folder]["documents"].add(doc_key)
         
-        # Преобразуем в удобный формат
         for folder, data in folder_stats.items():
             stats["folders_summary"][folder] = {
                 "sections": data["sections"],
@@ -1267,7 +1170,6 @@ class SimpleSectionDatabase:
                 "selected_percentage": round((data["selected"] / data["sections"] * 100), 1) if data["sections"] > 0 else 0
             }
         
-        # Статистика по форматам
         format_stats = {}
         for section in self.sections:
             ext = section.get("document_extension", ".txt").lower()
@@ -1276,6 +1178,376 @@ class SimpleSectionDatabase:
         stats["formats_summary"] = format_stats
         
         return stats
+
+# ==============================================
+# СИСТЕМА УПРАВЛЕНИЯ СЕССИЯМИ
+# ==============================================
+
+class SessionManager:
+    """
+    Управление рабочими сессиями экспертов
+    
+    Структура сессии:
+    📁 session_YYYYMMDD_HHMMSS/
+    ├── 📄 *.txt или *.md           # Промт эксперта (любой файл с расширением .txt или .md)
+    ├── 📄 materials.json       # Выбранные разделы из базы
+    ├── 📁 attachments/         # Дополнительные файлы
+    └── 📄 response.md          # Ответ от AI (будет создан позже)
+    """
+    
+    def __init__(self, sessions_path: str = None):
+        """Инициализация менеджера сессий"""
+        self.sessions_path = Path(sessions_path or CONFIG["sessions_path"])
+        self.sessions_path.mkdir(exist_ok=True, parents=True)
+        self.prompt_extensions = ['.txt', '.md']  # Расширения файлов, которые считаются промтами
+    
+    def create_session(self, session_name: str = None) -> Optional[Path]:
+        """
+        Создает новую рабочую сессию
+        
+        Args:
+            session_name: Имя сессии (если None, генерируется автоматически)
+            
+        Returns:
+            Path: Путь к созданной сессии или None в случае ошибки
+        """
+        try:
+            # Генерируем имя сессии если не указано
+            if not session_name:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                session_name = f"session_{timestamp}"
+            
+            # Создаем папку сессии
+            session_path = self.sessions_path / session_name
+            session_path.mkdir(exist_ok=True, parents=True)
+            
+            # Создаем структуру папок
+            attachments_dir = session_path / "attachments"
+            attachments_dir.mkdir(exist_ok=True)
+            
+            # Создаем стандартный промт
+            prompt_file = session_path / "prompt.txt"
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(DEFAULT_PROMPT)
+            
+            # Создаем README файл с инструкцией
+            readme_file = session_path / "README.md"
+            readme_content = f"""# 🎯 РАБОЧАЯ СЕССИЯ: {session_name}
+
+## 📁 СТРУКТУРА ПАПКИ:
+
+1. **`*.txt` или `*.md`** - ваш вопрос к AI (любой файл с расширением .txt или .md)
+2. **`materials.json`** - выбранные нормативные документы (будет создан автоматически)
+3. **`attachments/`** - дополнительные файлы (PDF, JPG, DOCX и т.д.)
+4. **`response.md`** - ответ от AI (будет создан автоматически)
+
+## 📝 ИНСТРУКЦИЯ ДЛЯ ЭКСПЕРТА:
+
+### Шаг 1: Настройте промт
+1. Можете отредактировать файл `prompt.txt`
+2. Или создать новый файл с расширением .txt или .md (например: `new_prompt.md`)
+3. Система автоматически определит первый найденный файл промта
+4. Добавьте ваш конкретный вопрос в файл
+5. Сохраните изменения
+
+### Шаг 2: Добавьте дополнительные файлы (если нужно)
+1. Поместите файлы в папку `attachments/`
+2. Поддерживаемые форматы: PDF, JPG, PNG, DOCX, XLSX, TXT
+
+### Шаг 3: Экспортируйте материалы из базы
+1. Вернитесь в веб-интерфейс
+2. Нажмите "Экспорт в эту сессию"
+3. Выбранные разделы будут сохранены в `materials.json`
+
+### Шаг 4: Отправьте на анализ
+1. Используйте кнопку "Анализировать" (будет доступна позже)
+2. Или скопируйте все файлы в чат DeepSeek вручную
+
+---
+
+**Дата создания:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Путь к сессии:** `{session_path}`
+"""
+            
+            with open(readme_file, 'w', encoding='utf-8') as f:
+                f.write(readme_content)
+            
+            print(f"✅ Создана сессия: {session_path}")
+            return session_path
+            
+        except Exception as e:
+            print(f"❌ Ошибка создания сессии: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def find_prompt_files(self, session_path: Path) -> List[Dict]:
+        """
+        Находит все файлы промтов в папке сессии
+        
+        Args:
+            session_path: Путь к сессии
+            
+        Returns:
+            List[Dict]: Список файлов промтов с информацией
+        """
+        prompt_files = []
+        
+        for ext in self.prompt_extensions:
+            for file_path in session_path.glob(f"*{ext}"):
+                if file_path.is_file():
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        
+                        prompt_files.append({
+                            "name": file_path.name,
+                            "path": str(file_path),
+                            "extension": ext,
+                            "content": content,
+                            "size": file_path.stat().st_size,
+                            "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+                        })
+                    except Exception as e:
+                        print(f"⚠ Ошибка чтения промта {file_path.name}: {e}")
+        
+        # Сортируем по дате изменения (сначала новые)
+        prompt_files.sort(key=lambda x: x["modified"], reverse=True)
+        
+        return prompt_files
+    
+    def get_main_prompt(self, session_path: Path) -> Optional[Dict]:
+        """
+        Получает основной промт сессии (первый найденный файл промта)
+        
+        Args:
+            session_path: Путь к сессии
+            
+        Returns:
+            Optional[Dict]: Информация о основном промте или None
+        """
+        prompt_files = self.find_prompt_files(session_path)
+        
+        if prompt_files:
+            # Возвращаем первый (самый новый) промт
+            return prompt_files[0]
+        
+        return None
+    
+    def get_session_files(self, session_path: Path) -> Dict:
+        """
+        Получает информацию о файлах в сессии
+        
+        Args:
+            session_path: Путь к сессии
+            
+        Returns:
+            Dict: Информация о файлах сессии
+        """
+        files_info = {
+            "session_name": session_path.name,
+            "session_path": str(session_path),
+            "created": datetime.fromtimestamp(session_path.stat().st_ctime).isoformat(),
+            "has_prompt": False,
+            "has_materials": False,
+            "has_attachments": False,
+            "has_response": False,
+            "prompt_files": [],
+            "main_prompt": None,
+            "materials_count": 0,
+            "attachments_list": [],
+            "response_content": None
+        }
+        
+        # Ищем файлы промтов
+        prompt_files = self.find_prompt_files(session_path)
+        if prompt_files:
+            files_info["prompt_files"] = prompt_files
+            files_info["has_prompt"] = True
+            files_info["main_prompt"] = prompt_files[0]  # Основной промт
+        
+        # Проверяем материалы
+        materials_file = session_path / "materials.json"
+        if materials_file.exists():
+            try:
+                with open(materials_file, 'r', encoding='utf-8') as f:
+                    materials_data = json.load(f)
+                    files_info["materials_count"] = len(materials_data.get("sections", []))
+                files_info["has_materials"] = True
+            except Exception as e:
+                print(f"⚠ Ошибка чтения материалов: {e}")
+        
+        # Проверяем вложения
+        attachments_dir = session_path / "attachments"
+        if attachments_dir.exists():
+            attachments = []
+            for file_path in attachments_dir.glob("*"):
+                if file_path.is_file():
+                    attachments.append({
+                        "name": file_path.name,
+                        "path": str(file_path),
+                        "size": file_path.stat().st_size,
+                        "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+                    })
+            files_info["attachments_list"] = attachments
+            files_info["has_attachments"] = len(attachments) > 0
+        
+        # Проверяем ответ
+        response_file = session_path / "response.md"
+        if response_file.exists():
+            try:
+                with open(response_file, 'r', encoding='utf-8') as f:
+                    files_info["response_content"] = f.read()
+                files_info["has_response"] = True
+            except Exception as e:
+                print(f"⚠ Ошибка чтения ответа: {e}")
+        
+        return files_info
+    
+    def list_sessions(self) -> List[Dict]:
+        """
+        Возвращает список всех сессий
+        
+        Returns:
+            List[Dict]: Список информации о сессиях
+        """
+        sessions = []
+        
+        for session_dir in self.sessions_path.glob("session_*"):
+            if session_dir.is_dir():
+                files_info = self.get_session_files(session_dir)
+                sessions.append(files_info)
+        
+        # Сортируем по дате создания (сначала новые)
+        sessions.sort(key=lambda x: x["created"], reverse=True)
+        
+        return sessions
+    
+    def delete_session(self, session_path: Path) -> bool:
+        """
+        Удаляет сессию
+        
+        Args:
+            session_path: Путь к сессии
+            
+        Returns:
+            bool: Успешность удаления
+        """
+        try:
+            if session_path.exists() and session_path.is_dir():
+                shutil.rmtree(session_path)
+                print(f"🗑️ Удалена сессия: {session_path}")
+                return True
+            else:
+                print(f"⚠ Сессия не найдена: {session_path}")
+                return False
+        except Exception as e:
+            print(f"❌ Ошибка удаления сессии: {e}")
+            return False
+    
+    def export_to_session(self, session_path: Path, database: SimpleSectionDatabase) -> bool:
+        """
+        Экспортирует выбранные разделы в сессию
+        
+        Args:
+            session_path: Путь к сессии
+            database: База данных разделов
+            
+        Returns:
+            bool: Успешность экспорта
+        """
+        try:
+            materials_file = session_path / "materials.json"
+            return database.export_selected_to_json(materials_file)
+            
+        except Exception as e:
+            print(f"❌ Ошибка экспорта в сессию: {e}")
+            return False
+
+# ==============================================
+# КЛАСС ДЛЯ АДМИНИСТРАТИВНЫХ ОПЕРАЦИЙ
+# ==============================================
+
+class DatabaseAdmin:
+    """Класс для административных операций с базой данных"""
+    
+    def __init__(self, database: SimpleSectionDatabase):
+        self.db = database
+    
+    def export_full_database(self, output_path: Path) -> bool:
+        """Экспортирует всю базу данных в JSON файл"""
+        try:
+            export_data = {
+                "metadata": self.db.metadata.copy(),
+                "sections": self.db.sections.copy(),
+                "export_info": {
+                    "export_date": datetime.now().isoformat(),
+                    "version": "1.0",
+                    "total_sections": len(self.db.sections),
+                    "total_documents": self.db.metadata.get("total_documents", 0)
+                }
+            }
+            
+            output_path.parent.mkdir(exist_ok=True, parents=True)
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"✅ Полная база экспортирована в {output_path}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка экспорта полной базы: {e}")
+            return False
+    
+    def import_database(self, import_file: Path) -> Dict:
+        """Импортирует базу данных из JSON файла"""
+        try:
+            if not import_file.exists():
+                return {"success": False, "error": "Файл не найден"}
+            
+            with open(import_file, 'r', encoding='utf-8') as f:
+                import_data = json.load(f)
+            
+            # Проверяем структуру
+            if "sections" not in import_data:
+                return {"success": False, "error": "Неверный формат: отсутствуют разделы"}
+            
+            # Сохраняем старые данные для отката
+            old_sections = self.db.sections.copy()
+            old_metadata = self.db.metadata.copy()
+            
+            try:
+                # Импортируем данные
+                self.db.sections = import_data["sections"]
+                
+                # Обновляем метаданные
+                if "metadata" in import_data:
+                    self.db.metadata = import_data["metadata"]
+                else:
+                    # Пересчитываем метаданные
+                    self.db.metadata = self.db._recalculate_metadata(self.db.sections)
+                
+                # Сохраняем базу
+                self.db.save_database()
+                
+                return {
+                    "success": True,
+                    "sections_imported": len(self.db.sections),
+                    "documents_imported": self.db.metadata.get("total_documents", 0),
+                    "message": f"Импортировано {len(self.db.sections)} разделов"
+                }
+                
+            except Exception as e:
+                # Откатываем при ошибке
+                self.db.sections = old_sections
+                self.db.metadata = old_metadata
+                return {"success": False, "error": f"Ошибка импорта: {str(e)}"}
+                
+        except json.JSONDecodeError as e:
+            return {"success": False, "error": f"Ошибка JSON: {str(e)}"}
+        except Exception as e:
+            return {"success": False, "error": f"Ошибка: {str(e)}"}
     
     def validate_database(self) -> Dict:
         """Проверяет целостность базы данных"""
@@ -1284,482 +1556,98 @@ class SimpleSectionDatabase:
         
         # Проверяем наличие обязательных полей
         required_fields = ["id", "folder", "document", "content"]
-        for i, section in enumerate(self.sections):
+        for i, section in enumerate(self.db.sections):
             for field in required_fields:
                 if field not in section or not section[field]:
-                    issues.append(f"Раздел #{i}: отсутствует обязательное поле '{field}'")
+                    issues.append(f"Раздел #{i}: отсутствует поле '{field}'")
             
             # Проверяем валидность ID
             if "id" in section and not isinstance(section["id"], str):
                 issues.append(f"Раздел #{i}: поле 'id' должно быть строкой")
-            
-            # Проверяем валидность folder
-            valid_folders = ["normative", "methodology", "structured", "expertise", "unknown"]
-            if section.get("folder") not in valid_folders:
-                warnings.append(f"Раздел #{i}: нестандартная папка '{section.get('folder')}'")
         
         # Проверяем уникальность ID
-        ids = [s.get("id") for s in self.sections if s.get("id")]
+        ids = [s.get("id") for s in self.db.sections if s.get("id")]
         duplicates = [id for id in set(ids) if ids.count(id) > 1]
         if duplicates:
             issues.append(f"Найдены дублирующиеся ID: {duplicates[:3]}...")
         
         # Проверяем соответствие метаданных
-        actual_sections_count = len(self.sections)
-        metadata_sections_count = self.metadata.get("total_sections", 0)
+        actual_sections = len(self.db.sections)
+        metadata_sections = self.db.metadata.get("total_sections", 0)
         
-        if actual_sections_count != metadata_sections_count:
-            warnings.append(f"Несоответствие: фактически разделов {actual_sections_count}, в метаданных {metadata_sections_count}")
+        if actual_sections != metadata_sections:
+            warnings.append(f"Несоответствие: фактически {actual_sections} разделов, в метаданных {metadata_sections}")
         
         return {
             "is_valid": len(issues) == 0,
             "issues": issues,
             "warnings": warnings,
-            "sections_count": actual_sections_count,
-            "metadata_sections_count": metadata_sections_count,
+            "sections_count": actual_sections,
+            "metadata_sections_count": metadata_sections,
             "has_duplicate_ids": len(duplicates) > 0
         }
     
-    def search_sections(self, query: str, search_in_content: bool = False) -> List[Dict]:
-        """Поиск разделов по запросу"""
-        if not query:
-            return []
-        
-        query_lower = query.lower()
-        results = []
-        
-        for section in self.sections:
-            # Поиск в заголовке документа
-            doc_title = section.get("document_title", "").lower()
-            if query_lower in doc_title:
-                results.append(section)
-                continue
-            
-            # Поиск в названии раздела
-            section_title = section.get("title", "").lower()
-            if query_lower in section_title:
-                results.append(section)
-                continue
-            
-            # Поиск в содержимом (если включено)
-            if search_in_content:
-                content = section.get("content", "").lower()
-                if query_lower in content:
-                    results.append(section)
-                    continue
-        
-        return results
-    
-    def get_sections_by_folder(self, folder_name: str) -> List[Dict]:
-        """Возвращает все разделы из указанной папки"""
-        return [s for s in self.sections if s.get("folder") == folder_name]
-    
-    def get_unique_documents(self) -> List[Dict]:
-        """Возвращает список уникальных документов с полной информацией"""
-        unique_docs = {}
-        
-        for section in self.sections:
-            # Создаем уникальный ключ документа
-            doc_key = f"{section.get('folder', '')}_{section.get('document_path', '')}_{section.get('document', '')}"
-            
-            if doc_key not in unique_docs:
-                # Получаем статистику по разделам для этого документа
-                doc_sections = []
-                for s in self.sections:
-                    if (s.get('folder') == section.get('folder') and 
-                        s.get('document_path') == section.get('document_path') and 
-                        s.get('document') == section.get('document')):
-                        doc_sections.append({
-                            "id": s.get("id"),
-                            "title": s.get("title"),
-                            "type": s.get("section_type"),
-                            "word_count": s.get("word_count"),
-                            "selected": s.get("selected", False)
-                        })
-                
-                unique_docs[doc_key] = {
-                    "key": doc_key,
-                    "folder": section.get("folder", ""),
-                    "path": section.get("document_path", ""),
-                    "name": section.get("document", ""),
-                    "title": section.get("document_title", section.get("document", "")),
-                    "extension": section.get("document_extension", ""),
-                    "sections_count": len(doc_sections),
-                    "sections": doc_sections,
-                    "selected_sections": sum(1 for s in doc_sections if s.get("selected", False)),
-                    "total_words": sum(s.get("word_count", 0) for s in doc_sections)
-                }
-        
-        # Преобразуем в список и сортируем по названию
-        doc_list = list(unique_docs.values())
-        doc_list.sort(key=lambda x: x['title'].lower())
-        
-        return doc_list
-    
-    def get_sections_by_document(self, folder: str, doc_path: str, doc_name: str) -> List[Dict]:
-        """Возвращает все разделы конкретного документа"""
-        sections = []
-        
-        for section in self.sections:
-            if (section.get('folder') == folder and 
-                section.get('document_path') == doc_path and 
-                section.get('document') == doc_name):
-                sections.append(section)
-        
-        return sections
-
-# ==============================================
-# ГЕНЕРАТОР ФАЙЛОВ ДЛЯ ЭКСПЕРТА
-# ==============================================
-
-class ExpertFileGenerator:
-    """Генерирует файлы для работы эксперта с DeepSeek"""
-    
-    @staticmethod
-    def _clean_content_for_output(content: str) -> str:
-        """Дополнительная очистка контента для вывода в файлы - удаляет лишние пробелы и пустые строки"""
-        if not content:
-            return content
-        
-        # Удаляем множественные переносы строк (оставляем максимум 2 подряд)
-        cleaned = re.sub(r'\n{3,}', '\n\n', content)
-        
-        # Удаляем пустые строки в начале и конце
-        cleaned = cleaned.strip()
-        
-        # Удаляем пробелы в начале и конце каждой строки
-        lines = cleaned.split('\n')
-        cleaned_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if line:  # добавляем только непустые строки
-                # Удаляем множественные пробелы внутри строки
-                line = re.sub(r' +', ' ', line)
-                cleaned_lines.append(line)
-        
-        # Собираем обратно, оставляя по одной пустой строки между абзацами
-        if not cleaned_lines:
-            return ""
-        
-        result = []
-        for i, line in enumerate(cleaned_lines):
-            result.append(line)
-            # Добавляем пустую строку только если следующая строка не пустая
-            # и если это не последняя строка
-            if i < len(cleaned_lines) - 1 and cleaned_lines[i+1]:
-                result.append('')
-        
-        return '\n'.join(result)
-    
-    @staticmethod
-    def create_prompt_file(selected_sections: List[Dict], output_dir: Path, 
-                         template_manager: TemplateManager, selected_template_id: str) -> Optional[Path]:
-        """Создает файл с промтом для DeepSeek и возвращает путь к папке сессии"""
-        if not selected_sections:
-            return None
-        
-        session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_dir = output_dir / session_id
-        session_dir.mkdir(exist_ok=True, parents=True)
-        
-        # Получаем выбранный шаблон
-        selected_template = template_manager.get_template_by_id(selected_template_id)
-        if not selected_template:
-            selected_template = template_manager.get_default_template()
-        
-        # 1. Создаем файл all_sections.md
-        all_sections_file = session_dir / "all_sections.md"
-        try:
-            with open(all_sections_file, 'w', encoding='utf-8') as f:
-                f.write("# ВЫБРАННЫЕ РАЗДЕЛЫ ДЛЯ ОТВЕТА\n\n")
-                f.write(f"**Используемый шаблон:** {selected_template.get('name', 'Стандартный')}\n\n")
-                
-                by_folder = {}
-                for section in selected_sections:
-                    folder = section.get("folder", "unknown")
-                    if folder not in by_folder:
-                        by_folder[folder] = []
-                    by_folder[folder].append(section)
-                
-                folder_names = {
-                    "normative": "📖 НОРМАТИВНЫЕ АКТЫ",
-                    "methodology": "📚 МЕТОДИЧЕСКИЕ МАТЕРИАЛЫ",
-                    "structured": "🗂️ СТРУКТУРИРОВАННЫЕ ДОКУМЕНТЫ",
-                    "expertise": "👨‍⚖️ ЭКСПЕРТНЫЕ ЗАКЛЮЧЕНИЯ"
-                }
-                
-                for folder, sections in by_folder.items():
-                    folder_name = folder_names.get(folder, folder)
-                    
-                    f.write(f"\n## {folder_name}\n\n")
-                    
-                    for section in sections:
-                        # Для структурированных документов добавляем скобки в заголовок
-                        section_title = section.get('title', 'Без названия')
-                        if folder == "structured" and not section_title.startswith("["):
-                            section_title = f"[{section_title}]"
-                        
-                        f.write(f"### {section_title}\n")
-                        f.write(f"*Название документа:* {section.get('document_title', section.get('document', 'Без названия'))}\n")
-                        f.write(f"*Файл:* {section.get('document', '')}\n")
-                        f.write(f"*Формат:* {section.get('document_extension', '.txt')}\n")
-                        f.write(f"*Тип раздела:* {section.get('section_type', 'text')}\n")
-                        f.write(f"*Количество слов:* {section.get('word_count', 0)}\n")
-                        
-                        metadata = section.get('metadata', {})
-                        if metadata and isinstance(metadata, dict):
-                            if metadata.get('title'):
-                                f.write(f"*Название:* {metadata['title']}\n")
-                            if metadata.get('author'):
-                                f.write(f"*Автор:* {metadata['author']}\n")
-                            if metadata.get('date'):
-                                f.write(f"*Дата:* {metadata['date']}\n")
-                        
-                        # Очищаем контент перед записью
-                        cleaned_content = ExpertFileGenerator._clean_content_for_output(section.get('content', ''))
-                        f.write(f"\n{cleaned_content}\n\n")
-                        f.write("---\n\n")
-        except Exception as e:
-            print(f"Ошибка при создании all_sections.md: {e}")
-            return None
-        
-        # 2. Создаем файл deepseek_prompt.txt
-        prompt_file = session_dir / "deepseek_prompt.txt"
-        try:
-            with open(prompt_file, 'w', encoding='utf-8') as f:
-                prompt_content = ExpertFileGenerator._generate_prompt(
-                    selected_sections, 
-                    selected_template.get('prompt', '')
-                )
-                f.write(prompt_content)
-        except Exception as e:
-            print(f"Ошибка при создании deepseek_prompt.txt: {e}")
-            return None
-        
-        # 3. Создаем файл report.txt
-        report_file = session_dir / "report.txt"
-        try:
-            with open(report_file, 'w', encoding='utf-8') as f:
-                report_content = ExpertFileGenerator._generate_report(
-                    selected_sections, 
-                    session_id, 
-                    selected_template
-                )
-                f.write(report_content)
-        except Exception as e:
-            print(f"Ошибка при создании report.txt: {e}")
-            return None
-        
-        # 4. Создаем файл sections_data.json
-        json_file = session_dir / "sections_data.json"
-        try:
-            with open(json_file, 'w', encoding='utf-8') as f:
-                # Упрощаем данные для JSON
-                simplified_sections = []
-                for section in selected_sections:
-                    # Для структурированных документов добавляем скобки в заголовок
-                    title = section.get("title", "")
-                    if section.get("folder") == "structured" and not title.startswith("["):
-                        title = f"[{title}]"
-                    
-                    simplified = {
-                        "id": section.get("id"),
-                        "folder": section.get("folder"),
-                        "document": section.get("document"),
-                        "document_extension": section.get("document_extension"),
-                        "document_title": section.get("document_title"),
-                        "title": title,
-                        "content": section.get("content"),
-                        "section_type": section.get("section_type"),
-                        "word_count": section.get("word_count"),
-                        "metadata": section.get("metadata", {})
-                    }
-                    simplified_sections.append(simplified)
-                
-                json.dump(simplified_sections, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Ошибка при создании sections_data.json: {e}")
-            return None
-        
-        # 5. Сохраняем информацию о шаблоне
-        template_file = session_dir / "template_info.json"
-        try:
-            with open(template_file, 'w', encoding='utf-8') as f:
-                template_info = {
-                    "template_id": selected_template.get("id"),
-                    "template_name": selected_template.get("name"),
-                    "template_description": selected_template.get("description"),
-                    "created_at": datetime.now().isoformat()
-                }
-                json.dump(template_info, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Ошибка при создании template_info.json: {e}")
-            return None
-        
-        print(f"\n✅ Файлы созданы в папке: {session_dir}")
-        print(f"📄 1. all_sections.md - все выбранные разделы")
-        print(f"🤖 2. deepseek_prompt.txt - готовый промт для DeepSeek")
-        print(f"📊 3. report.txt - отчет по сессии")
-        print(f"📁 4. sections_data.json - данные в формате JSON")
-        print(f"🎯 5. template_info.json - информация о шаблоне")
-        
-        return session_dir
-    
-    @staticmethod
-    def _generate_prompt(sections: List[Dict], template_prompt: str) -> str:
-        """Генерирует промт для DeepSeek (вопрос ПЕРЕД материалами)"""
-        prompt = ""
-        
-        # 1. Сначала добавляем вопрос (шаблон)
-        prompt += template_prompt
-        prompt += "\n\n"
-        
-        # 2. Затем добавляем материалы
-        prompt += "МАТЕРИАЛЫ ДЛЯ ОТВЕТА:\n"
-        prompt += "=" * 60 + "\n\n"
-        
-        for i, section in enumerate(sections, 1):
-            folder = section.get("folder", "unknown")
-            folder_name = {
-                "normative": "Нормативный акт",
-                "methodology": "Методический материал",
-                "structured": "Структурированный документ",
-                "expertise": "Экспертное заключение"
-            }.get(folder, "Материал")
-            
-            section_title = section.get("title", "Без названия")
-            # Для структурированных документов добавляем скобки в заголовок
-            if folder == "structured" and not section_title.startswith("["):
-                section_title = f"[{section_title}]"
-                
-            doc_title = section.get("document_title", section.get("document", "Без названия"))
-            doc_file = section.get("document", "")
-            doc_ext = section.get("document_extension", ".txt")
-            section_type = section.get("section_type", "text")
-            
-            prompt += f"\n{'='*60}\n"
-            prompt += f"МАТЕРИАЛ {i}: {section_title}\n"
-            prompt += f"Тип: {folder_name} | Документ: {doc_title}\n"
-            prompt += f"Файл: {doc_file} | Формат: {doc_ext} | Тип раздела: {section_type}\n"
-            
-            metadata = section.get('metadata', {})
-            if metadata and isinstance(metadata, dict):
-                if metadata.get('author'):
-                    prompt += f"Автор: {metadata['author']} | "
-                if metadata.get('date'):
-                    prompt += f"Дата: {metadata['date']}"
-                prompt += f"\n"
-            
-            prompt += f"{'-'*40}\n\n"
-            
-            # Очищаем контент перед добавлением
-            cleaned_content = ExpertFileGenerator._clean_content_for_output(section.get('content', ''))
-            prompt += f"{cleaned_content}\n"
-        
-        prompt += f"\n{'='*60}\n\n"
-        
-        return prompt
-    
-    @staticmethod
-    def _generate_report(sections: List[Dict], session_id: str, template: Dict) -> str:
-        """Генерирует отчет по сессии"""
-        by_folder = {}
-        total_words = 0
-        
-        for section in sections:
-            folder = section.get("folder", "unknown")
-            if folder not in by_folder:
-                by_folder[folder] = []
-            by_folder[folder].append(section)
-            total_words += section.get("word_count", 0)
-        
-        folder_names = {
-            "normative": "Нормативные акты",
-            "methodology": "Методические материалы",
-            "structured": "Структурированные документы",
-            "expertise": "Экспертные заключения"
+    def get_detailed_stats(self) -> Dict:
+        """Возвращает детальную статистику базы данных"""
+        stats = {
+            "total": {
+                "sections": len(self.db.sections),
+                "documents": self.db.metadata.get("total_documents", 0),
+                "words": sum(s.get("word_count", 0) for s in self.db.sections),
+                "selected": sum(1 for s in self.db.sections if s.get("selected", False))
+            },
+            "by_folder": {},
+            "by_format": {},
+            "recent_updates": []
         }
         
-        report = f"ОТЧЕТ ПО СЕССИИ ЭКСПЕРТА\n"
-        report += f"========================\n\n"
-        report += f"ID сессии: {session_id}\n"
-        report += f"Дата создания: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        
-        report += f"ВЫБРАННЫЙ ШАБЛОН:\n"
-        report += f"• Название: {template.get('name', 'Стандартный')}\n"
-        report += f"• Описание: {template.get('description', '')}\n"
-        report += f"• ID: {template.get('id', 'standard')}\n\n"
-        
-        report += f"СТАТИСТИКА:\n"
-        report += f"• Всего выбрано разделов: {len(sections)}\n"
-        report += f"• Общий объем: {total_words} слов\n\n"
-        
-        if by_folder:
-            report += f"РАСПРЕДЕЛЕНИЕ ПО ТИПАМ МАТЕРИАЛОВ:\n"
-            for folder, folder_sections in by_folder.items():
-                name = folder_names.get(folder, folder)
-                words = sum(s.get("word_count", 0) for s in folder_sections)
-                report += f"• {name}: {len(folder_sections)} разделов ({words} слов)\n"
+        # Статистика по папкам
+        for folder in ["normative", "methodology", "structured", "expertise"]:
+            folder_sections = [s for s in self.db.sections if s.get("folder") == folder]
+            if folder_sections:
+                stats["by_folder"][folder] = {
+                    "sections": len(folder_sections),
+                    "documents": len(set(s.get("document", "") for s in folder_sections)),
+                    "words": sum(s.get("word_count", 0) for s in folder_sections),
+                    "selected": sum(1 for s in folder_sections if s.get("selected", False))
+                }
         
         # Статистика по форматам
         format_stats = {}
-        for section in sections:
+        for section in self.db.sections:
             ext = section.get("document_extension", ".txt").lower()
             format_stats[ext] = format_stats.get(ext, 0) + 1
+        stats["by_format"] = format_stats
         
-        if format_stats:
-            report += f"\nРАСПРЕДЕЛЕНИЕ ПО ФОРМАТАМ:\n"
-            for ext, count in format_stats.items():
-                format_name = {
-                    ".md": "Markdown",
-                    ".txt": "Текстовый"
-                }.get(ext, ext)
-                report += f"• {format_name}: {count} документов\n"
-        
-        report += f"\nСПИСОК ВЫБРАННЫХ РАЗДЕЛОВ:\n"
-        for i, section in enumerate(sections, 1):
-            folder = section.get("folder", "unknown")
-            folder_icon = {
-                "normative": "📖",
-                "methodology": "📚",
-                "structured": "🗂️",
-                "expertise": "👨‍⚖️"
-            }.get(folder, "📄")
+        # Последние обновления (первые 10)
+        if self.db.sections:
+            sorted_sections = sorted(
+                self.db.sections, 
+                key=lambda x: x.get("scan_date", ""), 
+                reverse=True
+            )[:10]
             
-            # Иконка формата
-            doc_ext = section.get("document_extension", ".txt")
-            format_icon = {
-                ".md": "📝",
-                ".txt": "📄"
-            }.get(doc_ext.lower(), "📎")
-            
-            section_title = section.get("title", "Без названия")
-            # Для структурированных документов добавляем скобки в заголовок
-            if folder == "structured" and not section_title.startswith("["):
-                section_title = f"[{section_title}]"
-                
-            doc_title = section.get("document_title", section.get("document", "Без названия"))
-            word_count = section.get("word_count", 0)
-            
-            report += f"{i}. {folder_icon}{format_icon} {section_title} ({word_count} слов)\n"
-            report += f"   Документ: {doc_title} ({doc_ext})\n"
+            for section in sorted_sections:
+                if section.get("scan_date"):
+                    try:
+                        date_str = section["scan_date"][:10]
+                        stats["recent_updates"].append({
+                            "document": section.get("document_title", section.get("document", "")),
+                            "section": section.get("title", ""),
+                            "date": date_str,
+                            "folder": section.get("folder", "")
+                        })
+                    except:
+                        pass
         
-        report += f"\nФАЙЛЫ СЕССИИ:\n"
-        report += f"1. all_sections.md - все выбранные разделы\n"
-        report += f"2. deepseek_prompt.txt - промт для DeepSeek\n"
-        report += f"3. report.txt - этот отчет\n"
-        report += f"4. sections_data.json - данные в JSON\n"
-        report += f"5. template_info.json - информация о шаблоне\n"
-        
-        return report
+        return stats
 
 # ==============================================
 # ВЕБ-ИНТЕРФЕЙС ДЛЯ ЭКСПЕРТА (Streamlit)
 # ==============================================
 
-# Адаптивный дизайн для мобильных устройств
-hide_streamlit_style = """
+# Стили для компактного интерфейса
+st.markdown("""
 <style>
 /* Компактные разделы */
 .section-item {
@@ -1812,138 +1700,65 @@ hide_streamlit_style = """
     border-color: #4CAF50;
 }
 
-/* Убираем все лишние отступы и разделители */
-div.stCheckbox > div > div {
-    margin: 0 !important;
-    padding: 0 !important;
-}
-div[data-testid="stVerticalBlock"] > div {
-    margin-bottom: 0 !important;
-}
-/* Уменьшаем отступы между элементами */
+/* Уменьшаем отступы */
 div.stContainer {
     padding-top: 1px !important;
     padding-bottom: 1px !important;
 }
-/* Компактные чекбоксы */
-.stCheckbox label {
-    padding: 1px 0 !important;
-    min-height: auto !important;
-}
-
-/* Убираем толстые линии в темной теме */
-[data-theme="dark"] hr {
-    border-color: #444 !important;
-    margin: 2px 0 !important;
-}
-
-/* Стили для выбора шаблона */
-.template-card {
-    border: 1px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 12px;
-    margin-bottom: 8px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-.template-card:hover {
-    border-color: #4CAF50;
-    background-color: #f8fff8;
-}
-.template-card.selected {
-    border-color: #4CAF50;
-    background-color: #e8f5e8;
-    border-width: 2px;
-}
-.template-name {
-    font-weight: 600;
-    font-size: 1rem;
-    margin-bottom: 4px;
-}
-.template-description {
-    font-size: 0.85rem;
-    color: #666;
-    margin-bottom: 0;
-}
-[data-theme="dark"] .template-card {
-    border-color: #555;
-    background-color: #2d2d2d;
-}
-[data-theme="dark"] .template-card:hover {
-    border-color: #4CAF50;
-    background-color: #1e3a1e;
-}
-[data-theme="dark"] .template-card.selected {
-    border-color: #4CAF50;
-    background-color: #1e3a1e;
-}
-[data-theme="dark"] .template-description {
-    color: #aaa;
-}
 </style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# Инициализация базы данных и менеджера шаблонов
+# Инициализация базы данных и менеджеров
 @st.cache_resource
 def init_database():
     return SimpleSectionDatabase()
 
 @st.cache_resource
-def init_template_manager():
-    return TemplateManager()
+def init_session_manager():
+    return SessionManager()
+
+@st.cache_resource
+def init_database_admin():
+    return DatabaseAdmin(init_database())
 
 # Инициализация сессии
 if 'db' not in st.session_state:
     st.session_state.db = init_database()
-    st.session_state.template_manager = init_template_manager()
-    st.session_state.notifications = []
-    st.session_state.last_update_time = datetime.now()
-    st.session_state.current_filter_hash = ""
+    st.session_state.session_manager = init_session_manager()
+    st.session_state.db_admin = init_database_admin()
+    st.session_state.current_session = None
     st.session_state.has_unsaved_changes = False
-    st.session_state.session_dir = None
-    st.session_state.files_created = False
-    st.session_state.selected_template = st.session_state.template_manager.get_default_template()["id"]
 
 db = st.session_state.db
-template_manager = st.session_state.template_manager
-
-# Функция для добавления уведомлений
-def add_notification(message, type="info"):
-    if 'notifications' not in st.session_state:
-        st.session_state.notifications = []
-    
-    st.session_state.notifications.append({
-        "message": message,
-        "type": type,
-        "time": datetime.now().strftime("%H:%M:%S")
-    })
-    
-    if len(st.session_state.notifications) > 10:
-        st.session_state.notifications.pop(0)
+session_manager = st.session_state.session_manager
+db_admin = st.session_state.db_admin
 
 # Настройка страницы
 st.set_page_config(
-    page_title="База разделов документов",
+    page_title="Экспертная система: Выбор разделов",
     page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Главный заголовок
-st.title("📚 БАЗА РАЗДЕЛОВ ДОКУМЕНТОВ")
+st.title("📚 ЭКСПЕРТНАЯ СИСТЕМА: ВЫБОР РАЗДЕЛОВ")
 st.markdown("---")
+
+# Проверка конфигурации
+if not CONFIG.get("admin_enabled", True):
+    st.warning("🚫 Администрирование отключено в конфигурации")
 
 # Используем вкладки
 tab1, tab2, tab3, tab4 = st.tabs([
     "📋 Выбор разделов",
-    "🎯 Выбор шаблона", 
+    "📁 Рабочие сессии", 
     "⚙️ Настройки",
-    "🛠️ Администрирование"
+    "🛠️ Администрирование" if CONFIG.get("admin_enabled", True) else "🚫 Администрирование"
 ])
 
 # ==============================================
-# ВКЛАДКА 1: ВЫБОР РАЗДЕЛОВ (компактный интерфейс)
+# ВКЛАДКА 1: ВЫБОР РАЗДЕЛОВ
 # ==============================================
 
 with tab1:
@@ -1955,23 +1770,21 @@ with tab1:
     if not display_data:
         st.info("База пуста. Нажмите 'Сканировать папки' в боковой панели.")
     else:
-        # ТОЛЬКО ПОИСК - убраны фильтры по папке и типу
+        # Поиск и фильтры
         with st.container():
             col1, col2 = st.columns([0.3, 0.7])
             
             with col1:
-                # Поиск по тексту
                 search_text = st.text_input("Поиск:", placeholder="По документу или разделу...", key="search_input_tab1")
             
             with col2:
-                # Фильтр по документу
                 doc_options = list(set(item["document_full"] for item in display_data))
                 doc_options.sort()
                 doc_filter = st.multiselect(
                     "Фильтр по документу:",
                     options=doc_options,
                     format_func=lambda x: x[:40] + "..." if len(x) > 40 else x,
-                    help="Выберите конкретный документ для просмотра и выбора разделов",
+                    help="Выберите конкретный документ",
                     key="doc_filter_tab1"
                 )
         
@@ -1989,14 +1802,7 @@ with tab1:
         if doc_filter:
             filtered_data = [item for item in filtered_data if item["document_full"] in doc_filter]
         
-        # Создаем хэш текущих фильтров
-        current_filter_hash = f"{search_text}_{doc_filter}"
-        
-        # Обновляем хэш фильтров
-        if st.session_state.current_filter_hash != current_filter_hash:
-            st.session_state.current_filter_hash = current_filter_hash
-        
-        # Компактная статистика и действия
+        # Статистика
         with st.container():
             col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
             
@@ -2028,32 +1834,27 @@ with tab1:
                     st.info(f"Снято {len(filtered_data)}")
                     st.rerun()
         
-        # ОТОБРАЖЕНИЕ РАЗДЕЛОВ В КОМПАКТНОМ ФОРМАТЕ
+        # ОТОБРАЖЕНИЕ РАЗДЕЛОВ
         if filtered_data:
             changes_made = False
             
-            # Компактный контейнер для разделов
             with st.container():
                 for idx, item in enumerate(filtered_data):
-                    # Определяем CSS классы
                     css_class = "section-item"
                     if item["selected"]:
                         css_class += " selected-section"
                     
-                    # Создаем компактный раздел
                     col_check, col_content = st.columns([0.4, 11.6])
                     
                     with col_check:
-                        # Чекбокс для выбора (компактный)
                         current_selected = item["selected"]
                         new_selected = st.checkbox(
                             "",
                             value=current_selected,
-                            key=f"select_{item['id']}_{current_filter_hash}",
+                            key=f"select_{item['id']}_{search_text}_{doc_filter}",
                             label_visibility="collapsed"
                         )
                         
-                        # Обновляем если изменилось
                         if new_selected != current_selected:
                             for section in db.sections:
                                 if section.get("id") == item["id"]:
@@ -2062,10 +1863,8 @@ with tab1:
                                     break
                     
                     with col_content:
-                        # Компактное отображение информации
                         st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
                         
-                        # Документ (жирный шрифт с хорошей видимостью в темной теме)
                         folder_icon = {
                             "normative": "📖",
                             "methodology": "📚",
@@ -2073,7 +1872,6 @@ with tab1:
                             "expertise": "👨‍⚖️"
                         }.get(item["folder"], "📄")
                         
-                        # Используем span с важными стилями для темной темы
                         st.markdown(
                             f'<div class="section-header">'
                             f'<span style="font-weight: 600; color: inherit;">{folder_icon} {item["document"]}</span>'
@@ -2081,7 +1879,6 @@ with tab1:
                             unsafe_allow_html=True
                         )
                         
-                        # Метаданные в одной строке
                         meta_info = []
                         meta_info.append(f"Формат: {item.get('extension', '.txt')}")
                         meta_info.append(f"Слов: {item['words']}")
@@ -2091,7 +1888,6 @@ with tab1:
                         st.markdown(f'<div class="section-meta">{" • ".join(meta_info)}</div>', 
                                 unsafe_allow_html=True)
                         
-                        # Название раздела с хорошей видимостью
                         st.markdown(
                             f'<div class="section-title">'
                             f'<span style="font-weight: 500; color: inherit;">{item["section"]}</span>'
@@ -2105,56 +1901,25 @@ with tab1:
             if changes_made:
                 st.session_state.has_unsaved_changes = True
             
-            # Компактная панель управления
+            # Панель управления
             st.markdown("---")
             
             with st.container():
-                col_manage1, col_manage2, col_manage3 = st.columns(3)
+                col_manage1, col_manage2 = st.columns(2)
                 
                 with col_manage1:
-                    # Кнопка сохранения
                     save_disabled = not st.session_state.has_unsaved_changes
                     
                     if st.button("💾 Сохранить выбор", type="primary", 
                                disabled=save_disabled, use_container_width=True, key="save_tab1"):
                         db.save_database()
                         st.success("✅ Выбор сохранен!")
-                        add_notification("Выбор разделов сохранен", "success")
                         st.session_state.has_unsaved_changes = False
                         st.rerun()
                 
                 with col_manage2:
-                    # Кнопка создания файлов для DeepSeek
-                    total_selected = sum(1 for item in display_data if item["selected"])
-                    create_disabled = total_selected == 0
-                    
-                    if st.button("🤖 Создать файлы", type="secondary",
-                               disabled=create_disabled, use_container_width=True, key="create_files_tab1"):
-                        selected_sections = db.get_selected_sections()
-                        
-                        with st.spinner("Создаю файлы..."):
-                            output_dir = Path(CONFIG.get("expert_sessions_path", "./expert_sessions"))
-                            output_dir.mkdir(exist_ok=True, parents=True)
-                            
-                            session_dir = ExpertFileGenerator.create_prompt_file(
-                                selected_sections, 
-                                output_dir,
-                                template_manager,
-                                st.session_state.selected_template
-                            )
-                            
-                            if session_dir:
-                                st.session_state.session_dir = session_dir
-                                st.session_state.files_created = True
-                                
-                                st.success(f"✅ Файлы созданы!")
-                                add_notification("Файлы сессии созданы", "success")
-                                st.rerun()
-                
-                with col_manage3:
-                    # Статус
                     if st.session_state.has_unsaved_changes:
-                        st.warning("⚠️ Не сохранено")
+                        st.warning("⚠️ Есть несохраненные изменения")
                     else:
                         st.info("💾 Все сохранено")
         
@@ -2162,784 +1927,799 @@ with tab1:
             st.info("Нет разделов, соответствующих выбранным фильтрам.")
 
 # ==============================================
-# ВКЛАДКА 2: ВЫБОР ШАБЛОНА
+# ВКЛАДКА 2: РАБОЧИЕ СЕССИИ
 # ==============================================
 
 with tab2:
-    st.subheader("🎯 ВЫБОР ШАБЛОНА ДЛЯ ИИ")
+    st.subheader("📁 УПРАВЛЕНИЕ РАБОЧИМИ СЕССИЯМИ")
     
-    templates = template_manager.get_templates_list()
+    # Создание новой сессии
+    col_create1, col_create2 = st.columns([3, 1])
     
-    if not templates:
-        st.info("Нет доступных шаблонов. Создайте первый шаблон.")
+    with col_create1:
+        new_session_name = st.text_input(
+            "Имя новой сессии (необязательно):",
+            placeholder="Оставьте пустым для автоназвания",
+            key="new_session_name"
+        )
+    
+    with col_create2:
+        if st.button("📁 Создать сессию", type="primary", use_container_width=True):
+            session_path = session_manager.create_session(new_session_name if new_session_name else None)
+            if session_path:
+                st.session_state.current_session = str(session_path)
+                st.success(f"✅ Создана сессия: {session_path.name}")
+                st.rerun()
+    
+    st.markdown("---")
+    
+    # Список существующих сессий
+    sessions = session_manager.list_sessions()
+    
+    if not sessions:
+        st.info("📭 Нет созданных сессий")
     else:
-        # Отображаем текущий выбранный шаблон
-        current_template = template_manager.get_template_by_id(st.session_state.selected_template)
-        if current_template:
-            st.markdown(f"### 📌 ТЕКУЩИЙ ШАБЛОН: **{current_template.get('name', 'Неизвестно')}**")
-            st.markdown(f"*{current_template.get('description', '')}*")
-            st.markdown("---")
+        st.markdown(f"### 📂 ВСЕГО СЕССИЙ: {len(sessions)}")
         
-        # Выбор шаблона
-        st.markdown("### 📋 ВЫБЕРИТЕ ШАБЛОН ОТВЕТА:")
-        
-        for template in templates:
-            is_selected = template["id"] == st.session_state.selected_template
-            
-            # Создаем карточку шаблона
-            css_class = "template-card"
-            if is_selected:
-                css_class += " selected"
-            
-            with st.container():
-                col1, col2 = st.columns([0.1, 0.9])
+        for session_info in sessions:
+            with st.expander(f"📁 {session_info['session_name']} - {session_info['created'][:10]}", expanded=False):
+                col_sess1, col_sess2 = st.columns([3, 1])
                 
-                with col1:
-                    # Радио-кнопка для выбора
-                    if st.button("✓", key=f"select_template_{template['id']}_tab2", 
-                               disabled=is_selected, use_container_width=True):
-                        st.session_state.selected_template = template["id"]
-                        st.success(f"Выбран шаблон: {template['name']}")
-                        add_notification(f"Выбран шаблон: {template['name']}", "info")
-                        st.rerun()
+                with col_sess1:
+                    # Статус файлов
+                    status_items = []
+                    
+                    if session_info["has_prompt"]:
+                        prompt_files = session_info["prompt_files"]
+                        if prompt_files:
+                            main_prompt = prompt_files[0]
+                            status_items.append(f"🎯 Промт: {main_prompt['name']}")
+                            
+                            if len(prompt_files) > 1:
+                                status_items.append(f"(+{len(prompt_files)-1} других)")
+                    else:
+                        status_items.append("📭 Нет промта")
+                    
+                    if session_info["has_materials"]:
+                        status_items.append(f"📚 {session_info['materials_count']} разделов")
+                    
+                    if session_info["has_attachments"]:
+                        status_items.append(f"📎 {len(session_info['attachments_list'])} файлов")
+                    
+                    if session_info["has_response"]:
+                        status_items.append("🤖 Ответ")
+                    
+                    st.markdown(" • ".join(status_items))
+                    
+                    # Путь к сессии
+                    st.caption(f"Путь: `{session_info['session_path']}`")
                 
-                with col2:
-                    st.markdown(f'<div class="{css_class}" onclick="document.getElementById(\'template_{template["id"]}\').click()">', 
-                              unsafe_allow_html=True)
-                    st.markdown(f'<div class="template-name">{template.get("name", "Без названия")}</div>', 
-                              unsafe_allow_html=True)
-                    st.markdown(f'<div class="template-description">{template.get("description", "")}</div>', 
-                              unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
+                with col_sess2:
+                    # Выбор текущей сессии
+                    is_current = (st.session_state.current_session == session_info["session_path"])
+                    
+                    if not is_current:
+                        if st.button("Выбрать", key=f"select_{session_info['session_name']}", use_container_width=True):
+                            st.session_state.current_session = session_info["session_path"]
+                            st.success(f"✅ Выбрана сессия: {session_info['session_name']}")
+                            st.rerun()
+                    else:
+                        st.success("✅ Активна")
+                
+                # Дополнительные действия
+                col_actions1, col_actions2, col_actions3 = st.columns(3)
+                
+                with col_actions1:
+                    # Экспорт выбранных разделов в эту сессию
+                    selected_count = sum(1 for section in db.sections if section.get("selected", False))
+                    
+                    if selected_count > 0:
+                        if st.button("📤 Экспорт материалов", key=f"export_{session_info['session_name']}", 
+                                   use_container_width=True):
+                            session_path = Path(session_info["session_path"])
+                            success = session_manager.export_to_session(session_path, db)
+                            
+                            if success:
+                                st.success(f"✅ Экспортировано {selected_count} разделов")
+                                st.rerun()
+                            else:
+                                st.error("❌ Ошибка экспорта")
+                    else:
+                        st.caption("Нет выбранных разделов")
+                
+                with col_actions2:
+                    # Открыть папку сессии
+                    if st.button("📂 Открыть", key=f"open_{session_info['session_name']}", 
+                               use_container_width=True):
+                        session_path = Path(session_info["session_path"])
+                        st.info(f"Путь к сессии: `{session_path}`")
+                        
+                        # Показываем содержимое
+                        with st.expander("📋 Содержимое сессии", expanded=False):
+                            # Показываем файлы промтов
+                            if session_info["has_prompt"]:
+                                prompt_files = session_info["prompt_files"]
+                                if prompt_files:
+                                    st.markdown("**🎯 Файлы промтов:**")
+                                    for i, prompt_file in enumerate(prompt_files[:3]):
+                                        icon = "📝" if prompt_file["extension"] == ".md" else "📄"
+                                        st.caption(f"{icon} {prompt_file['name']} ({prompt_file['size'] // 1024} KB)")
+                                        if i == 0:
+                                            st.caption(f"    (основной промт)")
+                                    
+                                    if len(prompt_files) > 3:
+                                        st.caption(f"  ... и еще {len(prompt_files) - 3} файлов промта")
+                                    
+                                    # Показываем основной промт
+                                    if session_info["main_prompt"]:
+                                        st.markdown(f"**Основной промт ({session_info['main_prompt']['name']}):**")
+                                        st.text_area("prompt_content", 
+                                                   value=session_info["main_prompt"]["content"][:300] + "..." if len(session_info["main_prompt"]["content"]) > 300 else session_info["main_prompt"]["content"],
+                                                   height=150,
+                                                   disabled=True,
+                                                   label_visibility="collapsed")
+                            
+                            if session_info["has_materials"]:
+                                st.markdown(f"**📚 Материалы:** {session_info['materials_count']} разделов")
+                            
+                            if session_info["has_attachments"]:
+                                st.markdown(f"**📎 Вложения:** {len(session_info['attachments_list'])} файлов")
+                                for attachment in session_info["attachments_list"][:3]:
+                                    st.caption(f"  • {attachment['name']} ({attachment['size'] // 1024} KB)")
+                                
+                                if len(session_info["attachments_list"]) > 3:
+                                    st.caption(f"  ... и еще {len(session_info['attachments_list']) - 3} файлов")
+                            
+                            if session_info["has_response"]:
+                                st.markdown("**🤖 Ответ AI:**")
+                                st.text_area("response.md",
+                                           value=session_info["response_content"][:500] + "..." if len(session_info["response_content"]) > 500 else session_info["response_content"],
+                                           height=200,
+                                           disabled=True,
+                                           label_visibility="collapsed")
+                
+                with col_actions3:
+                    # Удаление сессии
+                    if st.button("🗑️ Удалить", key=f"delete_{session_info['session_name']}", 
+                               type="secondary", use_container_width=True):
+                        session_path = Path(session_info["session_path"])
+                        
+                        # Подтверждение
+                        st.warning(f"Удалить сессию '{session_info['session_name']}'?")
+                        col_confirm1, col_confirm2 = st.columns(2)
+                        
+                        with col_confirm1:
+                            if st.button("✅ Да", key=f"confirm_delete_{session_info['session_name']}"):
+                                success = session_manager.delete_session(session_path)
+                                if success:
+                                    if st.session_state.current_session == str(session_path):
+                                        st.session_state.current_session = None
+                                    st.success("✅ Сессия удалена")
+                                    st.rerun()
+                        
+                        with col_confirm2:
+                            if st.button("❌ Нет", key=f"cancel_delete_{session_info['session_name']}"):
+                                st.rerun()
+    
+    # Текущая активная сессия
+    st.markdown("---")
+    
+    if st.session_state.current_session:
+        current_session_path = Path(st.session_state.current_session)
         
-        # Предпросмотр выбранного шаблона
-        st.markdown("---")
-        st.markdown("### 👁️ ПРЕДПРОСМОТР ШАБЛОНА")
-        
-        if current_template:
-            with st.expander("📝 Показать текст шаблона"):
-                st.text_area("Текст шаблона:", 
-                           value=current_template.get("prompt", ""),
-                           height=300,
-                           disabled=True,
-                           key=f"preview_{current_template['id']}_tab2")
-        
-        # Отображение кнопок для скачивания файлов
-        if st.session_state.files_created and st.session_state.session_dir:
-            st.markdown("---")
-            st.markdown("##### 📥 СКАЧАТЬ ФАЙЛЫ СЕССИИ")
+        if current_session_path.exists():
+            st.markdown(f"### ✅ АКТИВНАЯ СЕССИЯ: **{current_session_path.name}**")
             
-            session_dir = st.session_state.session_dir
+            # Показываем информацию о файлах промтов в активной сессии
+            session_files_info = session_manager.get_session_files(current_session_path)
             
-            # Компактное отображение кнопок скачивания
-            col_download1, col_download2, col_download3, col_download4, col_download5 = st.columns(5)
-            
-            # Файл all_sections.md
-            all_sections_path = session_dir / "all_sections.md"
-            if all_sections_path.exists():
-                with col_download1:
-                    with open(all_sections_path, 'r', encoding='utf-8') as f:
-                        all_sections_content = f.read()
+            if session_files_info["has_prompt"]:
+                prompt_files = session_files_info["prompt_files"]
+                if prompt_files:
+                    st.markdown("**🎯 Файлы промтов в сессии:**")
+                    col_prompts1, col_prompts2 = st.columns([3, 1])
                     
-                    st.download_button(
-                        label="📄 Разделы",
-                        data=all_sections_content,
-                        file_name=f"all_sections.md",
-                        mime="text/markdown",
-                        use_container_width=True,
-                        help="Все выбранные разделы",
-                        key="download_sections_tab2"
-                    )
-            
-            # Файл deepseek_prompt.txt
-            prompt_path = session_dir / "deepseek_prompt.txt"
-            if prompt_path.exists():
-                with col_download2:
-                    with open(prompt_path, 'r', encoding='utf-8') as f:
-                        prompt_content = f.read()
+                    with col_prompts1:
+                        for i, prompt_file in enumerate(prompt_files):
+                            icon = "📝" if prompt_file["extension"] == ".md" else "📄"
+                            st.caption(f"{icon} **{prompt_file['name']}** ({prompt_file['size'] // 1024} KB)")
+                            if i == 0:
+                                st.caption(f"    ← основной промт (используется по умолчанию)")
                     
-                    st.download_button(
-                        label="🤖 Промт",
-                        data=prompt_content,
-                        file_name=f"deepseek_prompt.txt",
-                        mime="text/plain",
-                        use_container_width=True,
-                        help="Промт для DeepSeek",
-                        key="download_prompt_tab2"
-                    )
+                    with col_prompts2:
+                        st.info("ℹ️ Система автоматически использует первый файл промта")
             
-            # Файл report.txt
-            report_path = session_dir / "report.txt"
-            if report_path.exists():
-                with col_download3:
-                    with open(report_path, 'r', encoding='utf-8') as f:
-                        report_content = f.read()
-                    
-                    st.download_button(
-                        label="📊 Отчет",
-                        data=report_content,
-                        file_name=f"report.txt",
-                        mime="text/plain",
-                        use_container_width=True,
-                        help="Отчет по сессии",
-                        key="download_report_tab2"
-                    )
+            # Быстрый экспорт
+            selected_count = sum(1 for section in db.sections if section.get("selected", False))
             
-            # Файл sections_data.json
-            json_path = session_dir / "sections_data.json"
-            if json_path.exists():
-                with col_download4:
-                    with open(json_path, 'r', encoding='utf-8') as f:
-                        json_content = f.read()
+            if selected_count > 0:
+                if st.button("🚀 БЫСТРЫЙ ЭКСПОРТ В АКТИВНУЮ СЕССИЮ", type="primary", use_container_width=True):
+                    success = session_manager.export_to_session(current_session_path, db)
                     
-                    st.download_button(
-                        label="📁 JSON",
-                        data=json_content,
-                        file_name=f"sections_data.json",
-                        mime="application/json",
-                        use_container_width=True,
-                        help="Данные в JSON",
-                        key="download_json_tab2"
-                    )
+                    if success:
+                        st.success(f"✅ Экспортировано {selected_count} разделов в {current_session_path.name}")
+                        
+                        # Показываем что делать дальше
+                        st.info("""
+                        📋 **ЧТО ДЕЛАТЬ ДАЛЬШЕ:**
+                        
+                        1. 📝 **Отредактируйте промт** - откройте любой файл .txt или .md в папке сессии
+                        2. 📎 **Добавьте файлы** (если нужно) - в папку `attachments/`
+                        3. 🤖 **Отправьте на анализ** - скопируйте все файлы в чат DeepSeek
+                        
+                        ⚡ **Быстрый путь:** Откройте папку `{current_session_path}` и работайте с файлами напрямую!
+                        """)
+                    else:
+                        st.error("❌ Ошибка экспорта")
+            else:
+                st.warning("⚠️ Нет выбранных разделов для экспорта")
             
-            # Файл template_info.json
-            template_path = session_dir / "template_info.json"
-            if template_path.exists():
-                with col_download5:
-                    with open(template_path, 'r', encoding='utf-8') as f:
-                        template_content = f.read()
-                    
-                    st.download_button(
-                        label="🎯 Шаблон",
-                        data=template_content,
-                        file_name=f"template_info.json",
-                        mime="application/json",
-                        use_container_width=True,
-                        help="Информация о шаблоне",
-                        key="download_template_tab2"
-                    )
+            # Инструкция для эксперта
+            with st.expander("📋 ПОЛНАЯ ИНСТРУКЦИЯ ДЛЯ ЭКСПЕРТА", expanded=True):
+                st.markdown(f"""
+                ### 🎯 КАК РАБОТАТЬ С СЕССИЕЙ:
+                
+                **📍 Расположение сессии:** `{current_session_path}`
+                
+                **📝 ШАГ 1: Настройте промт**
+                ```
+                Вы можете использовать любой файл с расширением .txt или .md
+                
+                Вариант A: Отредактируйте существующий файл
+                1. Откройте файл: {current_session_path}/prompt.txt
+                2. Добавьте ваш вопрос в начало файла
+                3. Сохраните файл
+                
+                Вариант B: Создайте новый файл промта
+                1. Создайте файл в папке: {current_session_path}/
+                2. Назовите как угодно (например: question.md, new_prompt.txt)
+                3. Напишите ваш вопрос в файле
+                4. Сохраните файл
+                
+                ⚡ Система автоматически использует первый найденный файл промта
+                ```
+                
+                **📎 ШАГ 2: Добавьте файлы (если нужно)**
+                ```
+                1. Поместите файлы в: {current_session_path}/attachments/
+                2. Поддерживаемые форматы: PDF, JPG, PNG, DOCX, XLSX, TXT
+                ```
+                
+                **📚 ШАГ 3: Проверьте материалы**
+                ```
+                1. Файл {current_session_path}/materials.json уже создан
+                2. Он содержит выбранные вами разделы из базы
+                ```
+                
+                **🤖 ШАГ 4: Отправьте на анализ**
+                ```
+                Вариант A (автоматически, будет позже):
+                - Нажмите кнопку "Анализировать" (будет добавлена)
+                
+                Вариант B (вручную):
+                - Откройте DeepSeek Chat
+                - Прикрепите все файлы из папки сессии
+                - Получите ответ
+                - Сохраните ответ как {current_session_path}/response.md
+                ```
+                
+                **💾 ШАГ 5: Сохраните результаты**
+                ```
+                Все файлы остаются в папке сессии
+                Можете архивировать для отправки или хранения
+                ```
+                """)
+        else:
+            st.error("❌ Активная сессия не найдена")
+            st.session_state.current_session = None
 
 # ==============================================
 # ВКЛАДКА 3: НАСТРОЙКИ
 # ==============================================
 
 with tab3:
-    st.subheader("⚙️ НАСТРОЙКИ")
+    st.subheader("⚙️ НАСТРОЙКИ СИСТЕМЫ")
     
-    st.markdown("### 📂 КОНФИГУРАЦИЯ ПУТЕЙ")
+    # Информация о системе
+    col_info1, col_info2 = st.columns(2)
     
-    # Отображаем текущую конфигурацию
-    for folder_name, folder_path in CONFIG["folders"].items():
-        display_name = {
-            "normative": "📖 Нормативные акты",
-            "methodology": "📚 Методические материалы",
-            "structured": "🗂️ Структурированные документы",
-            "expertise": "👨‍⚖️ Экспертные заключения"
-        }.get(folder_name, folder_name)
-        
-        st.text_input(
-            f"{display_name}:",
-            value=folder_path,
-            key=f"config_path_{folder_name}_tab3",
-            disabled=True
-        )
+    with col_info1:
+        st.metric("Всего разделов в базе", db.metadata.get("total_sections", 0))
+    
+    with col_info2:
+        st.metric("Выбрано разделов", sum(1 for section in db.sections if section.get("selected", False)))
     
     st.markdown("---")
     
-    # Проверка доступности папок
-    if st.button("🔍 Проверить доступность папок", type="secondary", key="check_folders_tab3"):
-        status = validate_folders(CONFIG["folders"])
-        
-        if status["all_exist"]:
-            st.success("✅ Все папки доступны!")
-        else:
-            st.error("❌ Некоторые папки недоступны:")
-            for folder_type, path in status["missing"]:
-                st.error(f"   - {folder_type}: {path}")
-            
-            st.info("ℹ️ Отредактируйте файл `config.json` и перезапустите приложение")
+    # Управление базой данных
+    st.markdown("### 📊 ОСНОВНЫЕ ОПЕРАЦИИ")
     
+    col_db1, col_db2, col_db3 = st.columns(3)
+    
+    with col_db1:
+        if st.button("🔍 Сканировать папки", type="primary", use_container_width=True):
+            with st.spinner("Сканирую папки..."):
+                db.scan_and_build_database()
+                st.success("✅ База данных обновлена!")
+                st.rerun()
+    
+    with col_db2:
+        if st.button("🗑️ Очистить все выборы", type="secondary", use_container_width=True):
+            cleared = db.clear_selections()
+            if cleared > 0:
+                st.success(f"✅ Очищено {cleared} выборов")
+                st.session_state.has_unsaved_changes = False
+                st.rerun()
+            else:
+                st.info("ℹ️ Нет выбранных разделов для очистки")
+    
+    with col_db3:
+        if st.button("📤 Экспорт выбранных", type="secondary", use_container_width=True):
+            selected_count = sum(1 for section in db.sections if section.get("selected", False))
+            if selected_count > 0:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                export_path = Path(CONFIG["sessions_path"]) / f"selected_sections_{timestamp}.json"
+                
+                success = db.export_selected_to_json(export_path)
+                if success:
+                    st.success(f"✅ Экспортировано {selected_count} разделов")
+                    
+                    with open(export_path, 'r', encoding='utf-8') as f:
+                        export_data = f.read()
+                    
+                    st.download_button(
+                        label=f"⬇️ Скачать {export_path.name}",
+                        data=export_data,
+                        file_name=export_path.name,
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.error("❌ Ошибка экспорта")
+            else:
+                st.info("ℹ️ Нет выбранных разделов для экспорта")
+    
+    # Просмотр конфигурации
     st.markdown("---")
-    st.markdown("### 📝 РЕДАКТИРОВАНИЕ КОНФИГУРАЦИИ")
+    st.markdown("### 📄 КОНФИГУРАЦИЯ")
     
-    # Показываем текущий config.json
     config_path = Path(__file__).parent / "config.json"
     if config_path.exists():
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_content = f.read()
-            
-            st.download_button(
-                label="⬇️ Скачать текущий config.json",
-                data=config_content,
-                file_name="config.json",
-                mime="application/json",
-                use_container_width=True,
-                help="Скачайте, отредактируйте и перезапустите приложение",
-                key="download_config_tab3"
-            )
-            
-            with st.expander("👁️ Показать текущий config.json"):
-                st.code(config_content, language="json")
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config_content = f.read()
         
-        except Exception as e:
-            st.error(f"Ошибка чтения файла конфигурации: {e}")
+        st.download_button(
+            label="⬇️ Скачать config.json",
+            data=config_content,
+            file_name="config.json",
+            mime="application/json",
+            use_container_width=True
+        )
+        
+        with st.expander("👁️ Показать конфигурацию"):
+            st.code(config_content, language="json")
     else:
-        st.info("Файл config.json не найден. Используются настройки по умолчанию.")
+        st.info("Файл config.json не найден")
         
-        # Кнопка для создания config.json с текущими настройками
-        if st.button("📄 Создать config.json", type="primary", key="create_config_tab3"):
+        if st.button("📄 Создать config.json", type="primary"):
             if save_config(CONFIG):
-                st.success("Файл config.json создан! Перезапустите приложение.")
-                add_notification("Файл конфигурации создан", "success")
-            else:
-                st.error("Не удалось создать файл конфигурации")
+                st.success("✅ Файл config.json создан")
+                st.rerun()
+    
+    # Просмотр стандартного промта
+    st.markdown("---")
+    st.markdown("### 🎯 СТАНДАРТНЫЙ ПРОМТ")
+    
+    st.text_area("Содержимое default_prompt.txt:",
+                value=DEFAULT_PROMPT,
+                height=300,
+                disabled=True)
+    
+    st.caption(f"Путь к файлу: {CONFIG.get('default_prompt', 'Не указан')}")
 
 # ==============================================
 # ВКЛАДКА 4: АДМИНИСТРИРОВАНИЕ
 # ==============================================
 
 with tab4:
-    st.subheader("🛠️ АДМИНИСТРИРОВАНИЕ")
-    
-    # Две колонки для разделения функционала
-    col_admin1, col_admin2 = st.columns(2)
-    
-    # ==============================================
-    # ЛЕВАЯ КОЛОНКА: ОПЕРАЦИИ С БАЗОЙ ДАННЫХ
-    # ==============================================
-    with col_admin1:
-        st.markdown("### 📊 ОПЕРАЦИИ С БАЗОЙ ДАННЫХ")
+    if not CONFIG.get("admin_enabled", True):
+        st.warning("🚫 Администрирование отключено в настройках")
+        st.info("Для включения установите `admin_enabled: true` в config.json")
+    else:
+        st.subheader("🛠️ АДМИНИСТРИРОВАНИЕ БАЗЫ ДАННЫХ")
         
-        # Текущая статистика базы
-        st.markdown("##### 📈 ТЕКУЩАЯ СТАТИСТИКА:")
-        col_stat1, col_stat2 = st.columns(2)
-        with col_stat1:
-            st.metric("Всего разделов", db.metadata.get("total_sections", 0))
-        with col_stat2:
-            st.metric("Всего документов", db.metadata.get("total_documents", 0))
+        # Две колонки для разделения функционала
+        col_admin1, col_admin2 = st.columns(2)
         
-        # Информация о последнем обновлении
-        if db.metadata.get("last_updated"):
-            last_updated = db.metadata['last_updated']
-            if isinstance(last_updated, str) and 'T' in last_updated:
-                display_date = last_updated.split('T')[0]
-                st.caption(f"Последнее обновление: {display_date}")
-        
-        st.markdown("---")
-        
-        # Кнопка сканирования папок
-        if st.button("🔍 Сканировать папки", type="primary", use_container_width=True, key="scan_folders_tab4"):
-            with st.spinner("Сканирую папки и обновляю базу данных..."):
-                try:
-                    db.scan_and_build_database()
+        # ==============================================
+        # ЛЕВАЯ КОЛОНКА: ОСНОВНЫЕ ОПЕРАЦИИ
+        # ==============================================
+        with col_admin1:
+            st.markdown("### 🔧 ОСНОВНЫЕ ОПЕРАЦИИ")
+            
+            # 1. Ручное сканирование папок
+            st.markdown("#### 🔍 СКАНИРОВАНИЕ ПАПОК")
+            
+            if st.button("🔄 Сканировать все папки", type="primary", use_container_width=True):
+                with st.spinner("Сканирую папки с документами..."):
+                    sections = db.scan_and_build_database()
                     
-                    # Показываем детальную статистику
-                    st.success("✅ База данных успешно обновлена!")
-                    
-                    # Детальная информация
-                    with st.expander("📊 Детальная статистика после сканирования"):
-                        st.info(f"**Всего документов:** {db.metadata.get('total_documents', 0)}")
-                        st.info(f"**Всего разделов:** {db.metadata.get('total_sections', 0)}")
+                    if sections:
+                        st.success(f"✅ Отсканировано {len(sections)} разделов")
                         
-                        if 'by_folder' in db.metadata:
-                            st.markdown("**Распределение по папкам:**")
-                            for folder, stats in db.metadata['by_folder'].items():
-                                folder_display = {
+                        # Показываем детальную статистику
+                        with st.expander("📊 Детальная статистика", expanded=True):
+                            stats = db_admin.get_detailed_stats()
+                            
+                            col_stat1, col_stat2 = st.columns(2)
+                            with col_stat1:
+                                st.metric("Разделов", stats["total"]["sections"])
+                                st.metric("Документов", stats["total"]["documents"])
+                            with col_stat2:
+                                st.metric("Всего слов", stats["total"]["words"])
+                                st.metric("Выбрано", stats["total"]["selected"])
+                            
+                            # Статистика по папкам
+                            st.markdown("**По папкам:**")
+                            for folder, data in stats["by_folder"].items():
+                                folder_name = {
                                     "normative": "📖 Нормативные",
                                     "methodology": "📚 Методические",
                                     "structured": "🗂️ Структурированные",
                                     "expertise": "👨‍⚖️ Экспертные"
                                 }.get(folder, folder)
-                                st.info(f"- {folder_display}: {stats.get('documents', 0)} док., {stats.get('sections', 0)} разд.")
-                    
-                    add_notification("База данных отсканирована и обновлена", "success")
-                    st.session_state.has_unsaved_changes = False
-                    
-                    # Обновляем страницу через 2 секунды
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"❌ Ошибка при сканировании: {str(e)}")
-                    add_notification(f"Ошибка сканирования: {str(e)}", "error")
-        
-        # Кнопка очистки базы
-        if st.button("🗑️ Очистить базу данных", type="secondary", use_container_width=True, key="clear_db_tab4"):
-            st.warning("⚠️ **ВНИМАНИЕ:** Это действие полностью очистит базу данных!")
+                                
+                                st.caption(f"{folder_name}: {data['sections']} разд., {data['documents']} док., {data['words']} слов")
+                    else:
+                        st.error("❌ Ошибка при сканировании")
             
-            # Дополнительное подтверждение
-            col_confirm1, col_confirm2 = st.columns(2)
-            with col_confirm1:
-                confirm_clear = st.checkbox("Я понимаю, что все данные будут удалены", key="confirm_clear_checkbox")
-            with col_confirm2:
-                if confirm_clear and st.button("✅ Подтвердить очистку", type="primary", key="confirm_clear_btn"):
-                    try:
-                        # Очищаем базу
-                        db.sections = []
-                        db.metadata = {
-                            "created_at": datetime.now().isoformat(),
-                            "last_updated": datetime.now().isoformat(),
-                            "total_sections": 0,
-                            "total_documents": 0,
-                            "by_folder": {},
-                            "supported_extensions": SUPPORTED_EXTENSIONS
-                        }
-                        db.save_database()
-                        
-                        st.success("✅ База данных очищена!")
-                        st.info("База теперь пуста. Для добавления данных используйте 'Сканировать папки'.")
-                        add_notification("База данных очищена", "warning")
-                        st.session_state.has_unsaved_changes = False
-                        
-                        # Обновляем страницу
-                        st.rerun()
-                        
-                    except Exception as e:
-                        st.error(f"❌ Ошибка при очистке базы: {str(e)}")
-        
-        # Просмотр текущей структуры базы
-        st.markdown("---")
-        st.markdown("##### 👁️ ПРОСМОТР СТРУКТУРЫ БАЗЫ")
-        
-        if st.button("📋 Показать структуру базы", use_container_width=True, key="show_structure_tab4"):
-            with st.expander("📁 Структура базы данных"):
-                if db.sections:
-                    # Группируем по папкам
-                    by_folder = {}
-                    for section in db.sections:
-                        folder = section.get("folder", "unknown")
-                        if folder not in by_folder:
-                            by_folder[folder] = []
-                        by_folder[folder].append(section)
-                    
-                    for folder, sections in by_folder.items():
-                        folder_display = {
-                            "normative": "📖 Нормативные",
-                            "methodology": "📚 Методические",
-                            "structured": "🗂️ Структурированные",
-                            "expertise": "👨‍⚖️ Экспертные"
-                        }.get(folder, folder)
-                        
-                        st.markdown(f"**{folder_display}** ({len(sections)} разделов)")
-                        
-                        # Группируем по документам
-                        docs = {}
-                        for section in sections:
-                            doc_name = section.get("document_title", section.get("document", "Без названия"))
-                            if doc_name not in docs:
-                                docs[doc_name] = []
-                            docs[doc_name].append(section)
-                        
-                        for doc_name, doc_sections in list(docs.items())[:5]:  # Показываем первые 5
-                            st.caption(f"  📄 {doc_name} ({len(doc_sections)} разделов)")
-                        
-                        if len(docs) > 5:
-                            st.caption(f"  ... и ещё {len(docs) - 5} документов")
-                        st.markdown("---")
-                else:
-                    st.info("База данных пуста")
-    
-    # ==============================================
-    # ПРАВАЯ КОЛОНКА: ИМПОРТ/ЭКСПОРТ БАЗЫ
-    # ==============================================
-    with col_admin2:
-        st.markdown("### 📤 ИМПОРТ/ЭКСПОРТ БАЗЫ")
-        
-        # Секция импорта
-        st.markdown("##### 📥 ИМПОРТ БАЗЫ ИЗ ФАЙЛА")
-        
-        uploaded_file = st.file_uploader(
-            "Выберите файл базы (JSON):",
-            type=['json'],
-            key="import_uploader_tab4",
-            help="Загрузите JSON файл с экспортированной базой данных"
-        )
-        
-        if uploaded_file is not None:
-            try:
-                # Парсим файл
-                import_data = json.load(uploaded_file)
+            # 2. Проверка целостности
+            st.markdown("---")
+            st.markdown("#### 🔍 ПРОВЕРКА ЦЕЛОСТНОСТИ")
+            
+            if st.button("✅ Проверить целостность базы", type="secondary", use_container_width=True):
+                validation = db_admin.validate_database()
                 
-                # Показываем информацию о файле
-                with st.expander("📊 Информация о загружаемом файле", expanded=True):
-                    # Основная информация
-                    if 'sections' in import_data:
-                        sections_count = len(import_data['sections'])
-                        st.success(f"✅ Файл содержит {sections_count} разделов")
+                if validation["is_valid"]:
+                    st.success("✅ База данных в порядке!")
+                else:
+                    st.error("❌ Найдены проблемы:")
+                    for issue in validation["issues"]:
+                        st.error(f"  • {issue}")
+                
+                if validation["warnings"]:
+                    st.warning("⚠️ Предупреждения:")
+                    for warning in validation["warnings"]:
+                        st.warning(f"  • {warning}")
+                
+                st.info(f"📊 Статистика: {validation['sections_count']} разделов, {validation['metadata_sections_count']} в метаданных")
+            
+            # 3. Очистка выборов
+            st.markdown("---")
+            st.markdown("#### 🗑️ ОЧИСТКА ВЫБОРОВ")
+            
+            selected_count = sum(1 for section in db.sections if section.get("selected", False))
+            
+            if selected_count > 0:
+                if st.button(f"❌ Очистить все выборы ({selected_count})", type="secondary", use_container_width=True):
+                    cleared = db.clear_selections()
+                    if cleared > 0:
+                        st.success(f"✅ Очищено {cleared} выборов")
+                        st.session_state.has_unsaved_changes = False
+                        st.rerun()
+            else:
+                st.info("ℹ️ Нет выбранных разделов для очистки")
+        
+        # ==============================================
+        # ПРАВАЯ КОЛОНКА: ИМПОРТ/ЭКСПОРТ
+        # ==============================================
+        with col_admin2:
+            st.markdown("### 📤 ИМПОРТ/ЭКСПОРТ")
+            
+            # 1. Экспорт полной базы
+            st.markdown("#### 📤 ЭКСПОРТ ПОЛНОЙ БАЗЫ")
+            
+            if CONFIG.get("allow_database_export", True):
+                if st.button("💾 Экспортировать всю базу", type="primary", use_container_width=True):
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    export_filename = f"full_database_export_{timestamp}.json"
+                    export_path = Path(CONFIG["sessions_path"]) / export_filename
+                    
+                    success = db_admin.export_full_database(export_path)
+                    
+                    if success:
+                        st.success(f"✅ База экспортирована в {export_filename}")
                         
-                        # Быстрый анализ структуры
-                        if sections_count > 0:
-                            # Считаем уникальные документы
-                            unique_docs = set()
-                            for section in import_data['sections']:
-                                doc_path = section.get("document_path", "")
-                                doc_name = section.get("document", "")
-                                if doc_path or doc_name:
-                                    unique_docs.add(f"{doc_path}_{doc_name}")
+                        # Предлагаем скачать
+                        with open(export_path, 'r', encoding='utf-8') as f:
+                            export_data = f.read()
+                        
+                        st.download_button(
+                            label=f"⬇️ Скачать {export_filename}",
+                            data=export_data,
+                            file_name=export_filename,
+                            mime="application/json",
+                            use_container_width=True
+                        )
+                        
+                        # Показываем информацию об экспорте
+                        with st.expander("📋 Информация об экспорте"):
+                            stats = db_admin.get_detailed_stats()
+                            st.info(f"**Разделов:** {stats['total']['sections']}")
+                            st.info(f"**Документов:** {stats['total']['documents']}")
+                            st.info(f"**Выбрано:** {stats['total']['selected']}")
+                            st.info(f"**Всего слов:** {stats['total']['words']}")
                             
-                            st.info(f"📄 Уникальных документов: {len(unique_docs)}")
-                            
-                            # Статистика по папкам
-                            folder_stats = {}
-                            for section in import_data['sections']:
-                                folder = section.get("folder", "unknown")
-                                folder_stats[folder] = folder_stats.get(folder, 0) + 1
-                            
-                            if folder_stats:
-                                st.info("📁 Распределение по папкам:")
-                                for folder, count in folder_stats.items():
+                            if stats['by_folder']:
+                                st.markdown("**Распределение по папкам:**")
+                                for folder, data in stats['by_folder'].items():
                                     folder_name = {
                                         "normative": "Нормативные",
                                         "methodology": "Методические",
                                         "structured": "Структурированные",
                                         "expertise": "Экспертные"
                                     }.get(folder, folder)
-                                    st.caption(f"  - {folder_name}: {count} разделов")
-                    
-                    if 'metadata' in import_data:
-                        metadata = import_data['metadata']
-                        st.info("📋 Метаданные из файла:")
-                        if 'created_at' in metadata:
-                            st.caption(f"  Дата создания: {metadata['created_at'][:10]}")
-                        if 'total_sections' in metadata:
-                            st.caption(f"  Разделов в метаданных: {metadata['total_sections']}")
-                        if 'total_documents' in metadata:
-                            st.caption(f"  Документов в метаданных: {metadata['total_documents']}")
-                
-                # Кнопка импорта
-                st.markdown("---")
-                if st.button("📥 Импортировать данные с пересчетом метаданных", 
-                           type="primary", use_container_width=True, key="import_data_btn"):
-                    
-                    with st.spinner("Импортирую и пересчитываю метаданные..."):
-                        try:
-                            # Используем новый метод импорта с пересчетом метаданных
-                            if 'sections' not in import_data:
-                                st.error("❌ Ошибка: В файле отсутствуют данные разделов (ключ 'sections')")
-                            else:
-                                # Импортируем разделы
-                                db.sections = import_data['sections']
-                                
-                                # Пересчитываем метаданные на основе фактических данных
-                                db.metadata = db._recalculate_metadata(db.sections)
-                                
-                                # Сохраняем оригинальную дату создания если она есть в импортируемых данных
-                                if 'metadata' in import_data and import_data['metadata']:
-                                    imported_metadata = import_data['metadata']
-                                    if 'created_at' in imported_metadata and imported_metadata['created_at']:
-                                        db.metadata['created_at'] = imported_metadata['created_at']
-                                
-                                # Сохраняем базу
-                                db.save_database()
-                                
-                                # Показываем результат
-                                st.success("✅ База успешно импортирована!")
-                                
-                                # Детальная информация
-                                with st.expander("📊 Новая статистика базы", expanded=True):
-                                    st.info(f"**Всего документов:** {db.metadata['total_documents']}")
-                                    st.info(f"**Всего разделов:** {db.metadata['total_sections']}")
-                                    st.info(f"**Дата создания:** {db.metadata['created_at'][:10]}")
-                                    st.info(f"**Последнее обновление:** {db.metadata['last_updated'][:19]}")
-                                    
-                                    # Статистика по папкам
-                                    if 'by_folder' in db.metadata:
-                                        st.markdown("**Распределение по папкам:**")
-                                        total_docs = 0
-                                        total_sections = 0
-                                        
-                                        for folder, stats in db.metadata['by_folder'].items():
-                                            folder_display = {
-                                                "normative": "📖 Нормативные",
-                                                "methodology": "📚 Методические",
-                                                "structured": "🗂️ Структурированные",
-                                                "expertise": "👨‍⚖️ Экспертные"
-                                            }.get(folder, folder)
-                                            
-                                            docs_count = stats.get('documents', 0)
-                                            sections_count = stats.get('sections', 0)
-                                            
-                                            st.info(f"- {folder_display}: {docs_count} док., {sections_count} разд.")
-                                            total_docs += docs_count
-                                            total_sections += sections_count
-                                        
-                                        st.markdown(f"**Итого:** {total_docs} док., {total_sections} разд.")
-                                
-                                add_notification(f"База импортирована из {uploaded_file.name}", "success")
-                                st.session_state.has_unsaved_changes = False
-                                
-                                # Обновляем страницу
-                                st.rerun()
-                                
-                        except Exception as import_error:
-                            st.error(f"❌ Ошибка импорта: {str(import_error)}")
-                            add_notification(f"Ошибка импорта: {str(import_error)}", "error")
-                            
-            except json.JSONDecodeError as e:
-                st.error(f"❌ Ошибка формата JSON: {str(e)}")
-                st.info("Убедитесь, что файл содержит корректный JSON")
-            except Exception as e:
-                st.error(f"❌ Ошибка при чтении файла: {str(e)}")
-        
-        # Разделитель
-        st.markdown("---")
-        
-        # Секция экспорта
-        st.markdown("##### 📤 ЭКСПОРТ ТЕКУЩЕЙ БАЗЫ")
-        
-        if st.button("📤 Экспортировать базу данных", type="secondary", use_container_width=True, key="export_db_btn"):
-            try:
-                # Подготавливаем данные для экспорта
-                export_data = {
-                    "sections": db.sections,
-                    "metadata": db.metadata
-                }
-                
-                # Конвертируем в JSON
-                export_json = json.dumps(export_data, ensure_ascii=False, indent=2)
-                
-                # Создаем имя файла с датой
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"database_export_{timestamp}.json"
-                
-                # Показываем информацию о экспортируемых данных
-                st.info(f"📊 Экспортируется:")
-                st.info(f"- Разделов: {len(db.sections)}")
-                st.info(f"- Документов: {db.metadata.get('total_documents', 0)}")
-                st.info(f"- Дата экспорта: {timestamp}")
-                
-                # Кнопка скачивания
-                st.download_button(
-                    label=f"⬇️ Скачать {filename}",
-                    data=export_json,
-                    file_name=filename,
-                    mime="application/json",
-                    use_container_width=True,
-                    help="Скачайте файл для резервного копирования или переноса данных",
-                    key="download_export_btn"
+                                    st.caption(f"  - {folder_name}: {data['sections']} разд.")
+                    else:
+                        st.error("❌ Ошибка экспорта")
+            else:
+                st.warning("🚫 Экспорт базы отключен в настройках")
+            
+            # 2. Импорт базы
+            st.markdown("---")
+            st.markdown("#### 📥 ИМПОРТ БАЗЫ")
+            
+            if CONFIG.get("allow_database_import", True):
+                uploaded_file = st.file_uploader(
+                    "Выберите файл базы данных (JSON):",
+                    type=['json'],
+                    key="admin_import_uploader",
+                    help="Загрузите JSON файл с экспортированной базой данных"
                 )
                 
-                add_notification(f"База экспортирована в {filename}", "info")
-                
-            except Exception as e:
-                st.error(f"❌ Ошибка при экспорте: {str(e)}")
-                add_notification(f"Ошибка экспорта: {str(e)}", "error")
-    
-    # ==============================================
-    # УПРАВЛЕНИЕ ШАБЛОНАМИ (нижняя часть)
-    # ==============================================
-    st.markdown("---")
-    st.markdown("### 🎯 УПРАВЛЕНИЕ ШАБЛОНАМИ ВОПРОСОВ")
-    
-    col_template1, col_template2 = st.columns(2)
-    
-    # ЛЕВАЯ КОЛОНКА: РЕДАКТИРОВАНИЕ ШАБЛОНОВ
-    with col_template1:
-        st.markdown("##### 📝 РЕДАКТИРОВАТЬ ШАБЛОНЫ")
-        
-        templates = template_manager.get_templates_list()
-        
-        if not templates:
-            st.info("Нет доступных шаблонов. Создайте первый шаблон.")
-        else:
-            for template in templates:
-                with st.expander(f"✏️ {template.get('name', 'Без названия')}", expanded=False):
-                    # Поля для редактирования
-                    new_name = st.text_input(
-                        "Название шаблона:", 
-                        value=template.get('name', ''),
-                        key=f"name_{template['id']}_tab4",
-                        help="Название шаблона, которое будет отображаться в списке"
-                    )
+                if uploaded_file is not None:
+                    # Сохраняем временный файл
+                    temp_dir = Path(tempfile.gettempdir())
+                    temp_file = temp_dir / uploaded_file.name
                     
-                    new_description = st.text_area(
-                        "Описание шаблона:",
-                        value=template.get('description', ''),
-                        key=f"desc_{template['id']}_tab4",
-                        help="Краткое описание назначения шаблона",
-                        height=80
-                    )
+                    with open(temp_file, 'wb') as f:
+                        f.write(uploaded_file.getvalue())
                     
-                    new_prompt = st.text_area(
-                        "Текст шаблона (prompt):",
-                        value=template.get('prompt', ''),
-                        height=200,
-                        key=f"prompt_{template['id']}_tab4",
-                        help="Текст, который будет отправляться ИИ вместе с материалами"
-                    )
+                    # Показываем информацию о файле
+                    st.info(f"📄 Загружен файл: {uploaded_file.name}")
+                    st.info(f"📊 Размер: {uploaded_file.size // 1024} KB")
                     
-                    # Кнопки действий
-                    col_btn1, col_btn2 = st.columns(2)
+                    # Предпросмотр структуры
+                    try:
+                        with open(temp_file, 'r', encoding='utf-8') as f:
+                            preview_data = json.load(f)
+                        
+                        sections_count = len(preview_data.get("sections", []))
+                        st.info(f"📋 Разделов в файле: {sections_count}")
+                        
+                        # Показываем предпросмотр структуры
+                        with st.expander("👁️ Предпросмотр структуры", expanded=False):
+                            if sections_count > 0:
+                                sample_section = preview_data["sections"][0]
+                                st.json({
+                                    "metadata_keys": list(preview_data.get("metadata", {}).keys()),
+                                    "section_sample": {
+                                        "folder": sample_section.get("folder"),
+                                        "document": sample_section.get("document"),
+                                        "title": sample_section.get("title", "")[:50] + "...",
+                                        "word_count": sample_section.get("word_count", 0)
+                                    }
+                                })
+                    except:
+                        st.warning("⚠️ Не удалось прочитать структуру файла")
                     
-                    with col_btn1:
-                        if st.button("💾 Сохранить изменения", key=f"save_{template['id']}_tab4", use_container_width=True):
-                            if new_name and new_prompt:
-                                # Обновляем шаблон
-                                template['name'] = new_name
-                                template['description'] = new_description
-                                template['prompt'] = new_prompt
-                                
-                                # Сохраняем изменения
-                                template_manager.update_templates(template_manager.templates)
-                                st.success(f"✅ Шаблон '{new_name}' обновлен!")
-                                add_notification(f"Шаблон '{new_name}' обновлен", "success")
-                                st.rerun()
-                            else:
-                                st.error("❌ Название и текст шаблона не могут быть пустыми")
+                    # Кнопка импорта
+                    st.markdown("---")
                     
-                    with col_btn2:
-                        # Проверяем, не является ли это последним шаблоном
-                        if len(templates) > 1:
-                            if st.button("🗑️ Удалить шаблон", key=f"delete_{template['id']}_tab4", 
-                                       type="secondary", use_container_width=True):
-                                # Подтверждение удаления
-                                st.warning(f"Вы уверены, что хотите удалить шаблон '{template['name']}'?")
-                                if st.button(f"✅ Да, удалить '{template['name']}'", 
-                                           key=f"confirm_delete_{template['id']}_tab4"):
-                                    # Удаляем шаблон
-                                    new_templates_list = [t for t in templates if t['id'] != template['id']]
-                                    template_manager.templates["templates"] = new_templates_list
-                                    template_manager.update_templates(template_manager.templates)
+                    if st.button("📥 Импортировать базу данных", type="secondary", use_container_width=True):
+                        st.warning("⚠️ **ВНИМАНИЕ:** Текущая база будет заменена!")
+                        
+                        # Дополнительное подтверждение
+                        col_confirm1, col_confirm2 = st.columns(2)
+                        with col_confirm1:
+                            confirm_import = st.checkbox("Я понимаю, что текущая база будет заменена", 
+                                                       key="confirm_import_checkbox")
+                        with col_confirm2:
+                            if confirm_import and st.button("✅ Подтвердить импорт", type="primary", 
+                                                          key="confirm_import_btn"):
+                                with st.spinner("Импортирую базу данных..."):
+                                    result = db_admin.import_database(temp_file)
                                     
-                                    st.success(f"✅ Шаблон '{template['name']}' удален!")
-                                    add_notification(f"Шаблон '{template['name']}' удален", "warning")
-                                    st.rerun()
-                        else:
-                            st.caption("❌ Нельзя удалить последний шаблон")
-    
-    # ПРАВАЯ КОЛОНКА: СОЗДАНИЕ НОВОГО ШАБЛОНА
-    with col_template2:
-        st.markdown("##### ➕ СОЗДАТЬ НОВЫЙ ШАБЛОН")
-        
-        with st.form("new_template_form_tab4", clear_on_submit=True):
-            new_template_name = st.text_input(
-                "Название нового шаблона:", 
-                placeholder="Например: Технический анализ",
-                help="Придумайте понятное название для нового шаблона",
-                key="new_template_name_tab4"
-            )
-            
-            new_template_desc = st.text_area(
-                "Описание шаблона:",
-                placeholder="Краткое описание цели шаблона",
-                help="Опишите, для каких задач предназначен этот шаблон",
-                height=80,
-                key="new_template_desc_tab4"
-            )
-            
-            new_template_prompt = st.text_area(
-                "Текст шаблона (prompt):",
-                placeholder="Введите текст промта для ИИ...",
-                height=250,
-                help="Основной текст, который будет отправляться ИИ. Можно использовать стандартные структуры ответа.",
-                key="new_template_prompt_tab4"
-            )
-            
-            # Примеры промтов
-            with st.expander("💡 Примеры структуры промтов"):
-                st.markdown("""
-                **Стандартная структура:**
-                ```
-                Ты — эксперт в области [специализация]. 
-                Используй информацию ТОЛЬКО из предоставленных материалов.
-                
-                СТРУКТУРА ОТВЕТА:
-                1. Краткий ответ
-                2. Детальный анализ
-                3. Выводы
-                4. Рекомендации
-                
-                ОТВЕТ ЭКСПЕРТА:
-                ```
-                """)
-            
-            submit_btn = st.form_submit_button("➕ Создать новый шаблон", type="primary", use_container_width=True, key="create_template_btn_tab4")
-        
-        # Обработка формы (ВНЕ формы)
-        if submit_btn:
-            if new_template_name and new_template_prompt:
-                # Создаем новый шаблон с уникальным ID
-                new_template = {
-                    "id": f"template_{uuid.uuid4().hex[:8]}",
-                    "name": new_template_name,
-                    "description": new_template_desc,
-                    "prompt": new_template_prompt
-                }
-                
-                # Добавляем в список шаблонов
-                templates = template_manager.get_templates_list()
-                templates.append(new_template)
-                
-                # Обновляем шаблоны
-                template_manager.templates["templates"] = templates
-                template_manager.update_templates(template_manager.templates)
-                
-                # Успешное сообщение
-                st.success(f"✅ Шаблон '{new_template_name}' успешно создан!")
-                st.info(f"🆔 ID шаблона: {new_template['id']}")
-                add_notification(f"Создан новый шаблон: {new_template_name}", "success")
-                
-                # Обновляем страницу
-                st.rerun()
+                                    if result["success"]:
+                                        st.success(f"✅ {result['message']}")
+                                        
+                                        # Показываем статистику после импорта
+                                        with st.expander("📊 Статистика после импорта", expanded=True):
+                                            stats = db_admin.get_detailed_stats()
+                                            
+                                            col_imp1, col_imp2 = st.columns(2)
+                                            with col_imp1:
+                                                st.metric("Разделов", stats["total"]["sections"])
+                                                st.metric("Документов", stats["total"]["documents"])
+                                            with col_imp2:
+                                                st.metric("Всего слов", stats["total"]["words"])
+                                                st.metric("Выбрано", stats["total"]["selected"])
+                                        
+                                        st.info("🔄 Обновите страницу для применения изменений")
+                                        st.rerun()
+                                        
+                                    else:
+                                        st.error(f"❌ Ошибка импорта: {result.get('error', 'Неизвестная ошибка')}")
             else:
-                st.error("❌ Заполните название и текст шаблона")
-    
-    # ==============================================
-    # ДОПОЛНИТЕЛЬНЫЕ ОПЕРАЦИИ
-    # ==============================================
-    st.markdown("---")
-    st.markdown("### 🔧 ДОПОЛНИТЕЛЬНЫЕ ОПЕРАЦИИ")
-    
-    col_extra1, col_extra2 = st.columns(2)
-    
-    with col_extra1:
-        # Перезагрузка шаблонов из файла
-        st.markdown("##### 🔄 ПЕРЕЗАГРУЗКА ШАБЛОНОВ")
-        
-        if st.button("🔄 Перезагрузить шаблоны из файла", 
-                   type="secondary", use_container_width=True,
-                   help="Загружает шаблоны из файла templates.json, отменяя все несохраненные изменения",
-                   key="reload_templates_btn"):
+                st.warning("🚫 Импорт базы отключен в настройках")
             
-            with st.spinner("Перезагружаю шаблоны..."):
-                try:
-                    template_manager.reload_templates()
-                    st.success("✅ Шаблоны успешно перезагружены из файла!")
+            # 3. Экспорт выбранных разделов
+            st.markdown("---")
+            st.markdown("#### 📤 ЭКСПОРТ ВЫБРАННЫХ РАЗДЕЛОВ")
+            
+            selected_count = sum(1 for section in db.sections if section.get("selected", False))
+            
+            if selected_count > 0:
+                if st.button(f"📋 Экспорт выбранных ({selected_count})", type="secondary", use_container_width=True):
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    export_filename = f"selected_sections_{timestamp}.json"
+                    export_path = Path(CONFIG["sessions_path"]) / export_filename
                     
-                    # Обновляем выбранный шаблон если он больше не существует
-                    current_templates_ids = [t['id'] for t in template_manager.get_templates_list()]
-                    if st.session_state.selected_template not in current_templates_ids:
-                        default_template = template_manager.get_default_template()
-                        st.session_state.selected_template = default_template['id']
-                        st.info(f"🔄 Выбранный шаблон изменен на: {default_template['name']}")
+                    success = db.export_selected_to_json(export_path)
                     
-                    add_notification("Шаблоны перезагружены из файла", "info")
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"❌ Ошибка при перезагрузке шаблонов: {str(e)}")
-    
-    with col_extra2:
-        # Сброс всех выборов
-        st.markdown("##### 🗑️ СБРОС ВЫБОРОВ")
+                    if success:
+                        st.success(f"✅ Экспортировано {selected_count} разделов")
+                        
+                        # Предлагаем скачать
+                        with open(export_path, 'r', encoding='utf-8') as f:
+                            export_data = f.read()
+                        
+                        st.download_button(
+                            label=f"⬇️ Скачать {export_filename}",
+                            data=export_data,
+                            file_name=export_filename,
+                            mime="application/json",
+                            use_container_width=True
+                        )
+                    else:
+                        st.error("❌ Ошибка экспорта")
+            else:
+                st.info("ℹ️ Нет выбранных разделов для экспорта")
         
-        selected_count = sum(1 for section in db.sections if section.get("selected", False))
+        # ==============================================
+        # ДЕТАЛЬНАЯ СТАТИСТИКА (полная ширина)
+        # ==============================================
+        st.markdown("---")
+        st.markdown("### 📊 ДЕТАЛЬНАЯ СТАТИСТИКА БАЗЫ")
         
-        if selected_count > 0:
-            if st.button("❌ Сбросить все выборы разделов", 
-                       type="secondary", use_container_width=True,
-                       help="Отменяет все выбранные разделы во всех документах",
-                       key="clear_selections_btn"):
+        if st.button("🔄 Обновить статистику", type="secondary", key="refresh_stats"):
+            st.rerun()
+        
+        stats = db_admin.get_detailed_stats()
+        
+        # Общая статистика
+        col_total1, col_total2, col_total3, col_total4 = st.columns(4)
+        with col_total1:
+            st.metric("Всего разделов", stats["total"]["sections"])
+        with col_total2:
+            st.metric("Всего документов", stats["total"]["documents"])
+        with col_total3:
+            st.metric("Всего слов", stats["total"]["words"])
+        with col_total4:
+            st.metric("Выбрано разделов", stats["total"]["selected"])
+        
+        # Статистика по папкам
+        st.markdown("#### 📁 РАСПРЕДЕЛЕНИЕ ПО ПАПКАМ")
+        
+        if stats["by_folder"]:
+            folders_data = []
+            for folder, data in stats["by_folder"].items():
+                folder_name = {
+                    "normative": "📖 Нормативные",
+                    "methodology": "📚 Методические",
+                    "structured": "🗂️ Структурированные",
+                    "expertise": "👨‍⚖️ Экспертные"
+                }.get(folder, folder)
                 
-                if st.checkbox("Подтвердить сброс всех выборов", key="confirm_clear_selections"):
-                    with st.spinner("Сбрасываю выборы..."):
-                        db.clear_selections()
-                        st.success(f"✅ Сброшено {selected_count} выборов разделов!")
-                        st.session_state.has_unsaved_changes = False
-                        add_notification(f"Сброшено {selected_count} выборов разделов", "info")
-                        st.rerun()
+                folders_data.append({
+                    "Папка": folder_name,
+                    "Разделы": data["sections"],
+                    "Документы": data["documents"],
+                    "Слова": data["words"],
+                    "Выбрано": data["selected"],
+                    "% от общего": round((data["sections"] / stats["total"]["sections"] * 100), 1) if stats["total"]["sections"] > 0 else 0
+                })
+            
+            # Сортируем по количеству разделов
+            folders_data.sort(key=lambda x: x["Разделы"], reverse=True)
+            
+            # Отображаем таблицу
+            df_folders = pd.DataFrame(folders_data)
+            st.dataframe(
+                df_folders,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Папка": st.column_config.TextColumn(width="medium"),
+                    "Разделы": st.column_config.NumberColumn(format="%d"),
+                    "Документы": st.column_config.NumberColumn(format="%d"),
+                    "Слова": st.column_config.NumberColumn(format="%d"),
+                    "Выбрано": st.column_config.NumberColumn(format="%d"),
+                    "% от общего": st.column_config.NumberColumn(format="%.1f %%")
+                }
+            )
+        
+        # Статистика по форматам
+        st.markdown("#### 📄 ФОРМАТЫ ДОКУМЕНТОВ")
+        
+        if stats["by_format"]:
+            formats_data = []
+            total_files = sum(stats["by_format"].values())
+            
+            for ext, count in stats["by_format"].items():
+                format_name = {
+                    ".md": "Markdown",
+                    ".txt": "Текстовый файл",
+                    ".pdf": "PDF документ",
+                    ".docx": "Word документ"
+                }.get(ext, ext)
+                
+                formats_data.append({
+                    "Формат": format_name,
+                    "Расширение": ext,
+                    "Количество": count,
+                    "% от общего": round((count / total_files * 100), 1)
+                })
+            
+            # Сортируем по количеству
+            formats_data.sort(key=lambda x: x["Количество"], reverse=True)
+            
+            # Отображаем таблицу
+            df_formats = pd.DataFrame(formats_data)
+            st.dataframe(
+                df_formats,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Формат": st.column_config.TextColumn(width="medium"),
+                    "Расширение": st.column_config.TextColumn(width="small"),
+                    "Количество": st.column_config.NumberColumn(format="%d"),
+                    "% от общего": st.column_config.NumberColumn(format="%.1f %%")
+                }
+            )
+        
+        # Последние обновления
+        st.markdown("#### 🕐 ПОСЛЕДНИЕ ОБНОВЛЕНИЯ")
+        
+        if stats["recent_updates"]:
+            for update in stats["recent_updates"][:5]:
+                folder_icon = {
+                    "normative": "📖",
+                    "methodology": "📚",
+                    "structured": "🗂️",
+                    "expertise": "👨‍⚖️"
+                }.get(update["folder"], "📄")
+                
+                st.caption(f"{folder_icon} **{update['document']}** - {update['section'][:50]}... ({update['date']})")
+            
+            if len(stats["recent_updates"]) > 5:
+                st.caption(f"... и еще {len(stats['recent_updates']) - 5} обновлений")
         else:
-            st.info("Нет выбранных разделов для сброса")
+            st.info("ℹ️ Нет информации о последних обновлениях")
+        
+        # Информация о системе
+        st.markdown("---")
+        st.markdown("#### ℹ️ ИНФОРМАЦИЯ О СИСТЕМЕ")
+        
+        col_sys1, col_sys2 = st.columns(2)
+        
+        with col_sys1:
+            st.info(f"**Версия базы:** {db.metadata.get('version', '1.0')}")
+            st.info(f"**Создана:** {db.metadata.get('created_at', 'Неизвестно')[:10]}")
+        
+        with col_sys2:
+            st.info(f"**Обновлена:** {db.metadata.get('last_updated', 'Неизвестно')[:19]}")
+            st.info(f"**Поддержка форматов:** {', '.join(CONFIG.get('supported_extensions', ['.md', '.txt']))}")
 
 # ==============================================
 # САЙДБАР
@@ -2949,78 +2729,132 @@ with st.sidebar:
     st.header("📊 СТАТИСТИКА")
     
     # Основная статистика
-    st.metric("Всего разделов", db.metadata.get("total_sections", 0))
+    stats = db.get_database_stats()
+    
+    st.metric("Всего разделов", stats["total_sections"])
     st.metric("Всего документов", db.metadata.get("total_documents", 0))
     
-    # Подсчет выбранных
-    selected_count = sum(1 for section in db.sections if section.get("selected", False))
+    selected_count = stats["selected_sections"]
     st.metric("Выбрано разделов", selected_count)
     
-    # Статистика по документам
-    unique_docs = db.get_unique_documents()
-    st.metric("Уникальных документов", len(unique_docs))
+    # Статистика по папкам
+    st.markdown("---")
+    st.header("📁 ПО ПАПКАМ")
     
-    # Информация о выбранном шаблоне
-    current_template = template_manager.get_template_by_id(st.session_state.selected_template)
-    if current_template:
-        st.markdown("---")
-        st.header("🎯 ШАБЛОН")
-        st.markdown(f"**{current_template.get('name', 'Неизвестно')}**")
-        st.caption(current_template.get('description', ''))
+    for folder, data in stats["folders_summary"].items():
+        folder_name = {
+            "normative": "📖 Нормативные",
+            "methodology": "📚 Методические",
+            "structured": "🗂️ Структурированные",
+            "expertise": "👨‍⚖️ Экспертные"
+        }.get(folder, folder)
+        
+        st.caption(f"{folder_name}")
+        st.caption(f"  {data['sections']} разд. ({data['selected']} выбрано)")
     
-    if db.metadata.get("last_updated"):
-        st.caption(f"Обновлено: {db.metadata['last_updated'][:10]}")
-    
+    # Быстрые действия
     st.markdown("---")
     st.header("⚡ БЫСТРЫЕ ДЕЙСТВИЯ")
     
-    # Кнопка сохранения если есть изменения
+    # Кнопка сохранения
     if st.session_state.has_unsaved_changes:
-        if st.button("💾 Сохранить выбор", type="primary", use_container_width=True, key="save_sidebar"):
+        if st.button("💾 Сохранить выбор", type="primary", use_container_width=True):
             db.save_database()
             st.success("Сохранено!")
             st.session_state.has_unsaved_changes = False
             st.rerun()
     
-    # Кнопка создания промта
-    if selected_count > 0:
-        if st.button("🤖 Создать файлы сессии", type="secondary", use_container_width=True, key="create_files_sidebar"):
-            # Устанавливаем флаг, чтобы показать кнопки скачивания
-            selected_sections = db.get_selected_sections()
-            with st.spinner("Создаю файлы..."):
-                output_dir = Path(CONFIG.get("expert_sessions_path", "./expert_sessions"))
-                output_dir.mkdir(exist_ok=True, parents=True)
-                session_dir = ExpertFileGenerator.create_prompt_file(
-                    selected_sections, 
-                    output_dir,
-                    template_manager,
-                    st.session_state.selected_template
-                )
-                if session_dir:
-                    st.session_state.session_dir = session_dir
-                    st.session_state.files_created = True
-                    st.success("Файлы созданы!")
-                    add_notification("Файлы сессии созданы", "success")
-                    st.rerun()
-    else:
-        st.caption("Выберите разделы для создания файлов")
-    
-    st.markdown("---")
-    st.header("🔔 УВЕДОМЛЕНИЯ")
-    
-    if 'notifications' in st.session_state and st.session_state.notifications:
-        for notification in reversed(st.session_state.notifications[-3:]):
-            icon = {
-                "info": "ℹ️",
-                "success": "✅",
-                "warning": "⚠️",
-                "error": "❌"
-            }.get(notification["type"], "ℹ️")
+    # Экспорт в активную сессию
+    if st.session_state.current_session and selected_count > 0:
+        if st.button("📤 Экспорт в активную сессию", type="secondary", use_container_width=True):
+            session_path = Path(st.session_state.current_session)
+            success = session_manager.export_to_session(session_path, db)
             
-            st.caption(f"{icon} {notification['time']}: {notification['message']}")
-        
-        if st.button("Очистить уведомления", use_container_width=True, key="clear_notifications_btn"):
-            st.session_state.notifications = []
+            if success:
+                st.success(f"✅ Экспортировано {selected_count} разделов")
+                st.rerun()
+    
+    # Создание сессии
+    if st.button("📁 Создать новую сессию", type="secondary", use_container_width=True):
+        session_path = session_manager.create_session()
+        if session_path:
+            st.session_state.current_session = str(session_path)
+            st.success("Сессия создана!")
             st.rerun()
+    
+    # Административные действия
+    if CONFIG.get("admin_enabled", True):
+        st.markdown("---")
+        st.header("🛠️ АДМИНИСТРАТИВНЫЕ")
+        
+        if st.button("🔍 Сканировать папки", use_container_width=True, 
+                   help="Ручное сканирование папок с документами"):
+            with st.spinner("Сканирую..."):
+                db.scan_and_build_database()
+                st.success("Сканирование завершено!")
+                st.rerun()
+        
+        if selected_count > 0:
+            if st.button(f"📤 Экспорт выбранных ({selected_count})", use_container_width=True):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                export_path = Path(CONFIG["sessions_path"]) / f"export_{timestamp}.json"
+                success = db.export_selected_to_json(export_path)
+                
+                if success:
+                    st.success(f"Экспортировано {selected_count} разделов")
+                    with open(export_path, 'r', encoding='utf-8') as f:
+                        st.download_button(
+                            label="⬇️ Скачать",
+                            data=f.read(),
+                            file_name=export_path.name,
+                            mime="application/json"
+                        )
+        
+        if st.button("⚙️ Перейти в администрирование", use_container_width=True):
+            st.switch_page("?tab=4")
+    
+    # Активная сессия
+    st.markdown("---")
+    
+    if st.session_state.current_session:
+        session_path = Path(st.session_state.current_session)
+        if session_path.exists():
+            st.header("✅ АКТИВНАЯ СЕССИЯ")
+            st.markdown(f"**{session_path.name}**")
+            
+            # Проверка файлов в сессии
+            files_info = session_manager.get_session_files(session_path)
+            
+            # Показываем информацию о промтах
+            if files_info["has_prompt"]:
+                prompt_files = files_info["prompt_files"]
+                if prompt_files:
+                    main_prompt = prompt_files[0]
+                    st.caption(f"🎯 {main_prompt['name']}")
+                    
+                    if len(prompt_files) > 1:
+                        st.caption(f"📚 (+{len(prompt_files)-1} других)")
+            else:
+                st.caption("📭 Нет промта")
+            
+            if files_info["has_materials"]:
+                st.caption(f"📚 {files_info['materials_count']} разд.")
+            
+            if files_info["has_attachments"]:
+                st.caption(f"📎 {len(files_info['attachments_list'])} файлов")
+            
+            if files_info["has_response"]:
+                st.caption("🤖 Ответ готов")
+            
+            # Кнопка открытия
+            if st.button("📂 Открыть папку", use_container_width=True):
+                st.info(f"Путь: `{session_path}`")
+        else:
+            st.warning("❌ Сессия не найдена")
+            st.session_state.current_session = None
     else:
-        st.caption("Нет уведомлений")
+        st.info("📭 Нет активной сессии")
+
+print("\n" + "="*60)
+print("🚀 Экспертная система запущена!")
+print("="*60)
