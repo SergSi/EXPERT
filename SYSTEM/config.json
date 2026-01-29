@@ -1,9 +1,9 @@
 {
   "folders": {
-    "normative": "./NORMATIVE",
-    "methodology": "./METHODOLOGY",
-    "structured": "./STRUCTURED",
-    "expertise": "./EXPERTISE"
+    "normative": "D:\\YandexDisk\\WORK\\EXPERT\\BD\\NORMATIVE",
+    "methodology": "D:\\YandexDisk\\WORK\\EXPERT\\BD\\METHODOLOGY",
+    "structured": "D:\\YandexDisk\\WORK\\EXPERT\\BD\\STRUCTURED",
+    "expertise": "D:\\YandexDisk\\WORK\\EXPERT\\BD\\EXPERTISE"
   },
   "database_path": "./knowledge_database.db",
   "sessions_path": "./sessions",
