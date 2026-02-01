@@ -1927,33 +1927,58 @@ with tab1:
             st.info("Нет разделов, соответствующих выбранным фильтрам.")
 
 # ==============================================
-# ВКЛАДКА 2: РАБОЧИЕ СЕССИИ
+# ВКЛАДКА 2: РАБОЧИЕ СЕССИИ (САМЫЙ ПРОСТОЙ ВАРИАНТ)
 # ==============================================
 
 with tab2:
     st.subheader("📁 УПРАВЛЕНИЕ РАБОЧИМИ СЕССИЯМИ")
     
-    # Создание новой сессии
+    # ✅ ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ ИМЕНИ ОСТАЕТСЯ!
+    def generate_session_name():
+        """Генерирует автоматическое имя сессии с временной меткой"""
+        return f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    # ==============================================
+    # БЛОК 1: СОЗДАНИЕ НОВОЙ СЕССИИ
+    # ==============================================
+    st.markdown("### 📝 СОЗДАНИЕ НОВОЙ СЕССИИ")
+    
     col_create1, col_create2 = st.columns([3, 1])
     
     with col_create1:
         new_session_name = st.text_input(
-            "Имя новой сессии (необязательно):",
-            placeholder="Оставьте пустым для автоназвания или начните с session_",
+            "Имя сессии (оставьте пустым для автоимени):",
+            placeholder="session_жалоба",
             key="new_session_name"
         )
     
     with col_create2:
-        if st.button("📁 Создать сессию", type="primary", use_container_width=True):
-            session_path = session_manager.create_session(new_session_name if new_session_name else None)
+        if st.button("📁 Создать", type="primary", use_container_width=True):
+            # Используем введенное имя или генерируем автоматически
+            if new_session_name and new_session_name.strip():
+                # Если пользователь ввел имя - используем его
+                session_name_to_use = new_session_name.strip()
+            else:
+                # Если поле пустое - генерируем автоматически
+                session_name_to_use = None  # Метод create_session сам вызовет generate_session_name()
+            
+            # Создаем сессию
+            session_path = session_manager.create_session(session_name_to_use)
+            
             if session_path:
                 st.session_state.current_session = str(session_path)
                 st.success(f"✅ Создана сессия: {session_path.name}")
                 st.rerun()
+            else:
+                st.error("❌ Ошибка при создании сессии")
     
     st.markdown("---")
     
-    # Список существующих сессий
+    # ==============================================
+    # БЛОК 2: СПИСОК СУЩЕСТВУЮЩИХ СЕССИЙ
+    # ==============================================
+    
+    # Получаем список всех сессий
     sessions = session_manager.list_sessions()
     
     if not sessions:
@@ -1961,62 +1986,68 @@ with tab2:
     else:
         st.markdown(f"### 📂 ВСЕГО СЕССИЙ: {len(sessions)}")
         
-        for session_info in sessions:
-            with st.expander(f"📁 {session_info['session_name']} - {session_info['created'][:10]}", expanded=False):
-                col_sess1, col_sess2 = st.columns([3, 1])
+        # Простой поиск
+        search_term = st.text_input("🔍 Поиск сессии:", 
+                                  placeholder="Введите часть имени...")
+        
+        # Фильтруем сессии по поисковому запросу
+        if search_term:
+            filtered_sessions = [s for s in sessions if search_term.lower() in s['session_name'].lower()]
+        else:
+            filtered_sessions = sessions
+        
+        # Отображаем сессии
+        for session_info in filtered_sessions:
+            with st.expander(f"📁 {session_info['session_name']}", expanded=False):
+                col1, col2 = st.columns([3, 1])  # ← ОПРЕДЕЛЯЕМ col1 и col2
                 
-                with col_sess1:
-                    # Статус файлов
-                    status_items = []
+                with col1:  # ← ПЕРВАЯ КОЛОНКА
+                    # Основная информация о сессии
+                    created_date = session_info['created'][:10]
+                    st.caption(f"Создана: {created_date}")
                     
-                    if session_info["has_prompt"]:
-                        prompt_files = session_info["prompt_files"]
-                        if prompt_files:
-                            main_prompt = prompt_files[0]
-                            status_items.append(f"🎯 Промт: {main_prompt['name']}")
-                            
-                            if len(prompt_files) > 1:
-                                status_items.append(f"(+{len(prompt_files)-1} других)")
+                    # Статус
+                    status_parts = []
+                    if session_info['has_materials']:
+                        status_parts.append(f"📚 {session_info['materials_count']} разд.")
+                    if session_info['has_prompt']:
+                        status_parts.append("🎯 Промт")
+                    if session_info['has_attachments']:
+                        status_parts.append(f"📎 {len(session_info['attachments_list'])} файл.")
+                    if session_info['has_response']:
+                        status_parts.append("🤖 Ответ")
+                    
+                    if status_parts:
+                        st.caption(" • ".join(status_parts))
                     else:
-                        status_items.append("📭 Нет промта")
-                    
-                    if session_info["has_materials"]:
-                        status_items.append(f"📚 {session_info['materials_count']} разделов")
-                    
-                    if session_info["has_attachments"]:
-                        status_items.append(f"📎 {len(session_info['attachments_list'])} файлов")
-                    
-                    if session_info["has_response"]:
-                        status_items.append("🤖 Ответ")
-                    
-                    st.markdown(" • ".join(status_items))
-                    
-                    # Путь к сессии
-                    st.caption(f"Путь: `{session_info['session_path']}`")
+                        st.caption("📭 Пустая сессия")
                 
-                with col_sess2:
-                    # Выбор текущей сессии
-                    is_current = (st.session_state.current_session == session_info["session_path"])
+                with col2:  # ← ВТОРАЯ КОЛОНКА (ИСПРАВЛЕНО: было col_2)
+                    # Кнопка выбора сессии
+                    is_current = (st.session_state.current_session == session_info['session_path'])
                     
                     if not is_current:
-                        if st.button("Выбрать", key=f"select_{session_info['session_name']}", use_container_width=True):
-                            st.session_state.current_session = session_info["session_path"]
+                        if st.button("Выбрать", 
+                                   key=f"select_{session_info['session_name']}",
+                                   use_container_width=True):
+                            st.session_state.current_session = session_info['session_path']
                             st.success(f"✅ Выбрана сессия: {session_info['session_name']}")
                             st.rerun()
                     else:
                         st.success("✅ Активна")
                 
-                # Дополнительные действия
-                col_actions1, col_actions2, col_actions3 = st.columns(3)
+                # Действия с сессией
+                col_act1, col_act2, col_act3 = st.columns(3)
                 
-                with col_actions1:
-                    # Экспорт выбранных разделов в эту сессию
+                with col_act1:
+                    # Экспорт материалов в сессию
                     selected_count = sum(1 for section in db.sections if section.get("selected", False))
                     
                     if selected_count > 0:
-                        if st.button("📤 Экспорт материалов", key=f"export_{session_info['session_name']}", 
+                        if st.button("📤 Экспорт", 
+                                   key=f"export_{session_info['session_name']}",
                                    use_container_width=True):
-                            session_path = Path(session_info["session_path"])
+                            session_path = Path(session_info['session_path'])
                             success = session_manager.export_to_session(session_path, db)
                             
                             if success:
@@ -2025,194 +2056,132 @@ with tab2:
                             else:
                                 st.error("❌ Ошибка экспорта")
                     else:
-                        st.caption("Нет выбранных разделов")
+                        st.caption("Нет выборки")
                 
-                with col_actions2:
-                    # Открыть папку сессии
-                    if st.button("📂 Открыть", key=f"open_{session_info['session_name']}", 
+                with col_act2:
+                    # Просмотр содержимого
+                    if st.button("👁️ Просмотр", 
+                               key=f"view_{session_info['session_name']}",
                                use_container_width=True):
-                        session_path = Path(session_info["session_path"])
-                        st.info(f"Путь к сессии: `{session_path}`")
+                        st.info(f"**Содержимое сессии:** {session_info['session_name']}")
                         
-                        # Показываем содержимое
-                        with st.expander("📋 Содержимое сессии", expanded=False):
-                            # Показываем файлы промтов
-                            if session_info["has_prompt"]:
-                                prompt_files = session_info["prompt_files"]
-                                if prompt_files:
-                                    st.markdown("**🎯 Файлы промтов:**")
-                                    for i, prompt_file in enumerate(prompt_files[:3]):
-                                        icon = "📝" if prompt_file["extension"] == ".md" else "📄"
-                                        st.caption(f"{icon} {prompt_file['name']} ({prompt_file['size'] // 1024} KB)")
-                                        if i == 0:
-                                            st.caption(f"    (основной промт)")
-                                    
-                                    if len(prompt_files) > 3:
-                                        st.caption(f"  ... и еще {len(prompt_files) - 3} файлов промта")
-                                    
-                                    # Показываем основной промт
-                                    if session_info["main_prompt"]:
-                                        st.markdown(f"**Основной промт ({session_info['main_prompt']['name']}):**")
-                                        st.text_area("prompt_content", 
-                                                   value=session_info["main_prompt"]["content"][:300] + "..." if len(session_info["main_prompt"]["content"]) > 300 else session_info["main_prompt"]["content"],
-                                                   height=150,
-                                                   disabled=True,
-                                                   label_visibility="collapsed")
-                            
-                            if session_info["has_materials"]:
-                                st.markdown(f"**📚 Материалы:** {session_info['materials_count']} разделов")
-                            
-                            if session_info["has_attachments"]:
-                                st.markdown(f"**📎 Вложения:** {len(session_info['attachments_list'])} файлов")
-                                for attachment in session_info["attachments_list"][:3]:
-                                    st.caption(f"  • {attachment['name']} ({attachment['size'] // 1024} KB)")
-                                
-                                if len(session_info["attachments_list"]) > 3:
-                                    st.caption(f"  ... и еще {len(session_info['attachments_list']) - 3} файлов")
-                            
-                            if session_info["has_response"]:
-                                st.markdown("**🤖 Ответ AI:**")
-                                st.text_area("response.md",
-                                           value=session_info["response_content"][:500] + "..." if len(session_info["response_content"]) > 500 else session_info["response_content"],
-                                           height=200,
-                                           disabled=True,
-                                           label_visibility="collapsed")
+                        if session_info['has_prompt']:
+                            prompt_files = session_info['prompt_files']
+                            if prompt_files:
+                                st.write("**Файлы промтов:**")
+                                for pf in prompt_files[:2]:
+                                    icon = "📝" if pf['extension'] == '.md' else "📄"
+                                    st.caption(f"{icon} {pf['name']}")
+                        
+                        if session_info['has_materials']:
+                            st.write(f"**Материалы:** {session_info['materials_count']} разделов")
+                        
+                        if session_info['has_attachments']:
+                            st.write(f"**Вложения:** {len(session_info['attachments_list'])} файлов")
                 
-                with col_actions3:
-                    # Удаление сессии
-                    if st.button("🗑️ Удалить", key=f"delete_{session_info['session_name']}", 
-                               type="secondary", use_container_width=True):
-                        session_path = Path(session_info["session_path"])
+                with col_act3:
+                    # ПРОСТАЯ КНОПКА УДАЛЕНИЯ (БЕЗ ПОДТВЕРЖДЕНИЯ)
+                    if st.button("🗑️ Удалить", 
+                               key=f"delete_{session_info['session_name']}",
+                               type="secondary",
+                               use_container_width=True):
+                        session_path = Path(session_info['session_path'])
                         
-                        # Подтверждение
-                        st.warning(f"Удалить сессию '{session_info['session_name']}'?")
-                        col_confirm1, col_confirm2 = st.columns(2)
-                        
-                        with col_confirm1:
-                            if st.button("✅ Да", key=f"confirm_delete_{session_info['session_name']}"):
-                                success = session_manager.delete_session(session_path)
-                                if success:
-                                    if st.session_state.current_session == str(session_path):
-                                        st.session_state.current_session = None
-                                    st.success("✅ Сессия удалена")
-                                    st.rerun()
-                        
-                        with col_confirm2:
-                            if st.button("❌ Нет", key=f"cancel_delete_{session_info['session_name']}"):
+                        try:
+                            # Проверяем существование
+                            if session_path.exists() and session_path.is_dir():
+                                # Удаляем сразу
+                                shutil.rmtree(session_path)
+                                
+                                # Если это активная сессия - сбрасываем
+                                if st.session_state.current_session == str(session_path):
+                                    st.session_state.current_session = None
+                                
+                                # Сообщение об успехе
+                                st.success(f"✅ Сессия '{session_info['session_name']}' удалена")
+                                
+                                # Обновляем страницу
                                 st.rerun()
+                            else:
+                                st.error("❌ Сессия не найдена")
+                                st.rerun()
+                                
+                        except Exception as e:
+                            st.error(f"❌ Ошибка при удалении: {e}")
     
-    # Текущая активная сессия
+    # ==============================================
+    # БЛОК 3: ИНФОРМАЦИЯ ОБ АКТИВНОЙ СЕССИИ
+    # ==============================================
+    
     st.markdown("---")
     
     if st.session_state.current_session:
-        current_session_path = Path(st.session_state.current_session)
+        current_path = Path(st.session_state.current_session)
         
-        if current_session_path.exists():
-            st.markdown(f"### ✅ АКТИВНАЯ СЕССИЯ: **{current_session_path.name}**")
+        if current_path.exists():
+            st.markdown(f"### ✅ АКТИВНАЯ СЕССИЯ: **{current_path.name}**")
             
-            # Показываем информацию о файлах промтов в активной сессии
-            session_files_info = session_manager.get_session_files(current_session_path)
-            
-            if session_files_info["has_prompt"]:
-                prompt_files = session_files_info["prompt_files"]
-                if prompt_files:
-                    st.markdown("**🎯 Файлы промтов в сессии:**")
-                    col_prompts1, col_prompts2 = st.columns([3, 1])
-                    
-                    with col_prompts1:
-                        for i, prompt_file in enumerate(prompt_files):
-                            icon = "📝" if prompt_file["extension"] == ".md" else "📄"
-                            st.caption(f"{icon} **{prompt_file['name']}** ({prompt_file['size'] // 1024} KB)")
-                            if i == 0:
-                                st.caption(f"    ← основной промт (используется по умолчанию)")
-                    
-                    with col_prompts2:
-                        st.info("ℹ️ Система автоматически использует первый файл промта")
-            
-            # Быстрый экспорт
-            selected_count = sum(1 for section in db.sections if section.get("selected", False))
-            
-            if selected_count > 0:
-                if st.button("🚀 БЫСТРЫЙ ЭКСПОРТ В АКТИВНУЮ СЕССИЮ", type="primary", use_container_width=True):
-                    success = session_manager.export_to_session(current_session_path, db)
-                    
-                    if success:
-                        st.success(f"✅ Экспортировано {selected_count} разделов в {current_session_path.name}")
-                        
-                        # Показываем что делать дальше
-                        st.info("""
-                        📋 **ЧТО ДЕЛАТЬ ДАЛЬШЕ:**
-                        
-                        1. 📝 **Отредактируйте промт** - откройте любой файл .txt или .md в папке сессии
-                        2. 📎 **Добавьте файлы** (если нужно) - в папку `attachments/`
-                        3. 🤖 **Отправьте на анализ** - скопируйте все файлы в чат DeepSeek
-                        
-                        ⚡ **Быстрый путь:** Откройте папку `{current_session_path}` и работайте с файлами напрямую!
-                        """)
+            # Получаем информацию о сессии
+            try:
+                files_info = session_manager.get_session_files(current_path)
+                
+                # Статус
+                col_stat1, col_stat2, col_stat3 = st.columns(3)
+                
+                with col_stat1:
+                    if files_info['has_prompt']:
+                        prompt_files = files_info['prompt_files']
+                        if prompt_files:
+                            st.success("🎯 Есть промт")
                     else:
-                        st.error("❌ Ошибка экспорта")
-            else:
-                st.warning("⚠️ Нет выбранных разделов для экспорта")
-            
-            # Инструкция для эксперта
-            with st.expander("📋 ПОЛНАЯ ИНСТРУКЦИЯ ДЛЯ ЭКСПЕРТА", expanded=True):
-                st.markdown(f"""
-                ### 🎯 КАК РАБОТАТЬ С СЕССИЕЙ:
+                        st.warning("📭 Нет промта")
                 
-                **📍 Расположение сессии:** `{current_session_path}`
+                with col_stat2:
+                    if files_info['has_materials']:
+                        st.success(f"📚 {files_info['materials_count']} материалов")
+                    else:
+                        st.warning("📭 Нет материалов")
                 
-                **📝 ШАГ 1: Настройте промт**
-                ```
-                Вы можете использовать любой файл с расширением .txt или .md
+                with col_stat3:
+                    if files_info['has_attachments']:
+                        st.success(f"📎 {len(files_info['attachments_list'])} вложений")
+                    else:
+                        st.info("📎 Нет вложений")
                 
-                Вариант A: Отредактируйте существующий файл
-                1. Откройте файл: {current_session_path}/prompt.txt
-                2. Добавьте ваш вопрос в начало файла
-                3. Сохраните файл
+                # Кнопка быстрого экспорта
+                selected_count = sum(1 for section in db.sections if section.get("selected", False))
                 
-                Вариант B: Создайте новый файл промта
-                1. Создайте файл в папке: {current_session_path}/
-                2. Назовите как угодно (например: question.md, new_prompt.txt)
-                3. Напишите ваш вопрос в файле
-                4. Сохраните файл
+                if selected_count > 0:
+                    if st.button("🚀 БЫСТРЫЙ ЭКСПОРТ В АКТИВНУЮ СЕССИЮ", 
+                               type="primary", 
+                               use_container_width=True):
+                        success = session_manager.export_to_session(current_path, db)
+                        
+                        if success:
+                            st.success(f"✅ Экспортировано {selected_count} разделов")
+                            st.rerun()
+                        else:
+                            st.error("❌ Ошибка экспорта")
+                else:
+                    st.info("ℹ️ Выберите разделы во вкладке 'Выбор разделов' для экспорта")
                 
-                ⚡ Система автоматически использует первый найденный файл промта
-                ```
-                
-                **📎 ШАГ 2: Добавьте файлы (если нужно)**
-                ```
-                1. Поместите файлы в: {current_session_path}/attachments/
-                2. Поддерживаемые форматы: PDF, JPG, PNG, DOCX, XLSX, TXT
-                ```
-                
-                **📚 ШАГ 3: Проверьте материалы**
-                ```
-                1. Файл {current_session_path}/materials.json уже создан
-                2. Он содержит выбранные вами разделы из базы
-                ```
-                
-                **🤖 ШАГ 4: Отправьте на анализ**
-                ```
-                Вариант A (автоматически, будет позже):
-                - Нажмите кнопку "Анализировать" (будет добавлена)
-                
-                Вариант B (вручную):
-                - Откройте DeepSeek Chat
-                - Прикрепите все файлы из папки сессии
-                - Получите ответ
-                - Сохраните ответ как {current_session_path}/response.md
-                ```
-                
-                **💾 ШАГ 5: Сохраните результаты**
-                ```
-                Все файлы остаются в папке сессии
-                Можете архивировать для отправки или хранения
-                ```
-                """)
+                # Инструкция
+                with st.expander("📋 ИНСТРУКЦИЯ", expanded=False):
+                    st.markdown(f"""
+                    1. 📝 **Редактируйте промт** в папке: `{current_path}`
+                    2. 📎 **Добавляйте файлы** в `{current_path}/attachments/`
+                    3. 🤖 **Используйте с ИИ** (DeepSeek/ChatGPT)
+                    4. 💾 **Сохраняйте ответ** как `{current_path}/response.md`
+                    """)
+                    
+            except Exception as e:
+                st.error(f"❌ Ошибка загрузки информации о сессии: {e}")
         else:
             st.error("❌ Активная сессия не найдена")
             st.session_state.current_session = None
-
+    else:
+        st.info("📭 Нет активной сессии. Выберите или создайте сессию.")
+        
 # ==============================================
 # ВКЛАДКА 3: НАСТРОЙКИ
 # ==============================================
@@ -2782,7 +2751,8 @@ with st.sidebar:
             st.success("Сессия создана!")
             st.rerun()
     
-    # Административные действия
+    # Административные действия - УДАЛЕН ПРОБЛЕМНЫЙ БЛОК
+    # Вместо него можно оставить только безопасные действия:
     if CONFIG.get("admin_enabled", True):
         st.markdown("---")
         st.header("🛠️ АДМИНИСТРАТИВНЫЕ")
@@ -2795,7 +2765,7 @@ with st.sidebar:
                 st.rerun()
         
         if selected_count > 0:
-            if st.button(f"📤 Экспорт выбранных ({selected_count})", use_container_width=True):
+            if st.button(f"📤 Экспорт разделов ({selected_count})", use_container_width=True):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 export_path = Path(CONFIG["sessions_path"]) / f"export_{timestamp}.json"
                 success = db.export_selected_to_json(export_path)
@@ -2810,8 +2780,8 @@ with st.sidebar:
                             mime="application/json"
                         )
         
-        if st.button("⚙️ Перейти в администрирование", use_container_width=True):
-            st.switch_page("?tab=4")
+        # Вместо проблемной кнопки можно добавить информационное сообщение:
+        st.info("ℹ️ Для доступа ко всем административным функциям перейдите во вкладку '🛠️ Администрирование'")
     
     # Активная сессия
     st.markdown("---")
