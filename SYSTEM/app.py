@@ -35,24 +35,30 @@ def load_templates():
             with open(templates_path, 'r', encoding='utf-8') as f:
                 templates_data = json.load(f)
                 print(f"✅ Шаблоны загружены из {templates_path}")
-                return templates_data
+                # Проверяем структуру - должна быть список
+                if isinstance(templates_data, list):
+                    return templates_data
+                else:
+                    # Конвертируем старую структуру в новую
+                    print(f"⚠ Конвертируем старую структуру шаблонов в новую")
+                    if "templates" in templates_data:
+                        templates_list = templates_data["templates"]
+                        if templates_list and len(templates_list) > 0:
+                            return templates_list
         except Exception as e:
             print(f"❌ Ошибка загрузки шаблонов: {e}")
     
     # Шаблоны по умолчанию если файл не найден или поврежден
     print(f"⚠ Файл шаблонов не найден: {templates_path}")
-    return {
-        "templates": [
-            {
-                "id": "standard",
-                "name": "📝 Стандартный ответ",
-                "description": "Развернутый профессиональный ответ с анализом",
-                "prompt": "Ты — эксперт в области землепользования и кадастра.\n\nНа основе предоставленных материалов подготовь развернутый профессиональный ответ.\n\nИНСТРУКЦИЯ:\n1. Проанализируй все предоставленные материалы\n2. Используй информацию ТОЛЬКО из предоставленных материалов\n3. Не используй внешние знания или предположения\n\nСТРУКТУРА ОТВЕТА:\n1. ПОВТОРЕНИЕ ВОПРОСА: Сформулируй исходный вопрос своими словами, показывая правильное понимание и задавая рамки анализа\n2. Краткий ответ: 2-3 предложения с дословным ответом\n3. Детальный ответ с анализом (только на основе материалов)\n4. Практические рекомендации (обоснованные материалами)\n5. Выводы\n6. НЕДОСТАЮЩИЕ СВЕДЕНИЯ (при необходимости): Конкретный перечень того, чего не хватает в материалах\n\nОТВЕТ ЭКСПЕРТА:",
-                "selected": True
-            }
-        ],
-        "default_template": "standard"
-    }
+    return [
+        {
+            "id": "standard",
+            "name": "📝 Стандартный ответ",
+            "description": "Развернутый профессиональный ответ с анализом",
+            "prompt": "Ты — эксперт в области землепользования и кадастра.\n\nНа основе предоставленных материалов подготовь развернутый профессиональный ответ.\n\nИНСТРУКЦИЯ:\n1. Проанализируй все предоставленные материалы\n2. Используй информацию ТОЛЬКО из предоставленных материалов\n3. Не используй внешние знания или предположения\n\nСТРУКТУРА ОТВЕТА:\n1. ПОВТОРЕНИЕ ВОПРОСА: Сформулируй исходный вопрос своими словами, показывая правильное понимание и задавая рамки анализа\n2. Краткий ответ: 2-3 предложения с дословным ответом\n3. Детальный ответ с анализом (только на основе материалов)\n4. Практические рекомендации (обоснованные материалами)\n5. Выводы\n6. НЕДОСТАЮЩИЕ СВЕДЕНИЯ (при необходимости): Конкретный перечень того, чего не хватает в материалах\n\nОТВЕТ ЭКСПЕРТА:",
+            "selected": True
+        }
+    ]
 
 def save_templates(templates_data):
     """
@@ -84,18 +90,21 @@ def get_selected_template(templates_data):
     """
     Возвращает выбранный шаблон
     """
-    for template in templates_data["templates"]:
+    if not templates_data:
+        return None
+    
+    for template in templates_data:
         if template.get("selected", False):
             return template
     
     # Если ни один не выбран, возвращаем первый
-    return templates_data["templates"][0]
+    return templates_data[0] if templates_data else None
 
 def update_selected_template(templates_data, selected_id):
     """
     Обновляет выбранный шаблон
     """
-    for template in templates_data["templates"]:
+    for template in templates_data:
         template["selected"] = (template["id"] == selected_id)
     
     return templates_data
@@ -220,7 +229,7 @@ def load_default_prompt():
     """
     templates_data = load_templates()
     selected_template = get_selected_template(templates_data)
-    return selected_template.get("prompt", "")
+    return selected_template.get("prompt", "") if selected_template else ""
 
 # ==============================================
 # ЗАГРУЗКА КОНФИГУРАЦИИ И ИНИЦИАЛИЗАЦИЯ
@@ -1115,67 +1124,33 @@ class SimpleSectionDatabase:
                 print("⚠ Нет выбранных разделов для экспорта")
                 return False
             
-            # Формируем структуру данных для экспорта
-            export_data = {
-                "metadata": {
-                    "export_date": datetime.now().isoformat(),
-                    "total_sections": len(selected_sections),
-                    "source": "Expert System App",
-                    "version": "1.0"
-                },
-                "sections": []
-            }
-            
-            # Группируем по папкам для статистики
-            folder_stats = {}
-            total_words = 0
+            # Формируем УПРОЩЕННУЮ структуру данных для экспорта
+            export_data = []
             
             for section in selected_sections:
-                folder = section.get("folder", "unknown")
-                if folder not in folder_stats:
-                    folder_stats[folder] = 0
-                folder_stats[folder] += 1
-                
-                word_count = section.get("word_count", 0)
-                total_words += word_count
-                
-                # Форматируем заголовок для структурированных документов
+                doc_title = section.get("document_title", "")
                 section_title = section.get("title", "")
-                if folder == "structured" and not section_title.startswith("["):
+                content = section.get("content", "")
+                
+                # Для структурированных документов корректируем заголовок
+                if section.get("folder") == "structured" and not section_title.startswith("["):
                     section_title = f"[{section_title}]"
                 
-                export_data["sections"].append({
-                    "id": section.get("id"),
-                    "folder": folder,
-                    "document": section.get("document", ""),
-                    "document_title": section.get("document_title", section.get("document", "")),
-                    "document_extension": section.get("document_extension", ".txt"),
-                    "document_path": section.get("document_path", ""),
+                export_data.append({
+                    "title": doc_title,
                     "section_title": section_title,
-                    "content": section.get("content", ""),
-                    "section_type": section.get("section_type", "text"),
-                    "word_count": word_count,
-                    "metadata": section.get("metadata", {}),
-                    "scan_date": section.get("scan_date", "")
+                    "content": content
                 })
-            
-            # Добавляем статистику
-            export_data["statistics"] = {
-                "total_words": total_words,
-                "average_words_per_section": round(total_words / len(selected_sections), 1),
-                "by_folder": folder_stats
-            }
             
             # Создаем папку если не существует
             output_path.parent.mkdir(exist_ok=True, parents=True)
             
-            # Сохраняем в JSON
+            # Сохраняем в JSON с простой структурой
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, ensure_ascii=False, indent=2)
             
             print(f"✅ Экспортировано {len(selected_sections)} разделов в {output_path}")
-            print(f"   Всего слов: {total_words}")
-            print(f"   Распределение по папкам: {folder_stats}")
+            print(f"   Формат: упрощенный JSON (массив объектов)")
             
             return True
             
@@ -1236,7 +1211,7 @@ class SessionManager:
     Структура сессии:
     📁 session_YYYYMMDD_HHMMSS/
     ├── 📄 prompt.txt           # Промт из выбранного шаблона
-    ├── 📄 materials.json       # Выбранные разделы из базы
+    ├── 📄 materials.json       # Выбранные разделы из базы (УПРОЩЕННЫЙ ФОРМАТ)
     ├── 📁 attachments/         # Дополнительные файлы
     └── 📄 response.md          # Ответ от AI (будет создан позже)
     """
@@ -1283,7 +1258,7 @@ class SessionManager:
             if template_prompt:
                 prompt_content = template_prompt
             else:
-                prompt_content = selected_template.get("prompt", "")
+                prompt_content = selected_template.get("prompt", "") if selected_template else ""
             
             with open(prompt_file, 'w', encoding='utf-8') as f:
                 f.write(prompt_content)
@@ -1295,7 +1270,7 @@ class SessionManager:
 ## 📁 СТРУКТУРА ПАПКИ:
 
 1. **`prompt.txt`** - вопрос к AI (создан из выбранного шаблона)
-2. **`materials.json`** - выбранные нормативные документы
+2. **`materials.json`** - выбранные нормативные документы (УПРОЩЕННЫЙ ФОРМАТ)
 3. **`attachments/`** - дополнительные файлы
 4. **`response.md`** - ответ от AI
 
@@ -1310,7 +1285,7 @@ class SessionManager:
 ---
 
 **Дата создания:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**Шаблон:** {selected_template.get('name', 'Неизвестно')}
+**Шаблон:** {selected_template.get('name', 'Неизвестно') if selected_template else 'Неизвестно'}
 **Путь:** `{session_path}`
 """
             
@@ -1318,7 +1293,7 @@ class SessionManager:
                 f.write(readme_content)
             
             print(f"✅ Создана сессия: {session_path}")
-            print(f"   📝 Шаблон: {selected_template.get('name', 'Неизвестно')}")
+            print(f"   📝 Шаблон: {selected_template.get('name', 'Неизвестно') if selected_template else 'Неизвестно'}")
             return session_path
             
         except Exception as e:
@@ -1431,7 +1406,7 @@ class SessionManager:
             try:
                 with open(materials_file, 'r', encoding='utf-8') as f:
                     materials_data = json.load(f)
-                    files_info["materials_count"] = len(materials_data.get("sections", []))
+                    files_info["materials_count"] = len(materials_data)
                 files_info["has_materials"] = True
             except Exception as e:
                 print(f"⚠ Ошибка чтения материалов: {e}")
@@ -2016,7 +1991,7 @@ with tab2:
             # Получаем выбранный шаблон
             templates_data = load_templates()
             selected_template = get_selected_template(templates_data)
-            template_prompt = selected_template.get("prompt", "")
+            template_prompt = selected_template.get("prompt", "") if selected_template else ""
             
             # Создаем сессию с промтом из шаблона
             session_path = session_manager.create_session(
@@ -2027,7 +2002,7 @@ with tab2:
             if session_path:
                 st.session_state.current_session = str(session_path)
                 st.success(f"✅ Создана сессия: {session_path.name}")
-                st.success(f"📝 Шаблон: {selected_template['name']}")
+                st.success(f"📝 Шаблон: {selected_template['name'] if selected_template else 'Неизвестно'}")
                 st.rerun()
             else:
                 st.error("❌ Ошибка при создании сессии")
@@ -2317,36 +2292,42 @@ with tab3:
     selected_template = get_selected_template(templates_data)
     
     # Отображаем текущий выбранный шаблон
-    st.info(f"**Текущий шаблон:** {selected_template['name']}")
-    st.caption(f"{selected_template['description']}")
+    if selected_template:
+        st.info(f"**Текущий шаблон:** {selected_template['name']}")
+        st.caption(f"{selected_template['description']}")
+    else:
+        st.warning("⚠️ Нет доступных шаблонов")
     
     # Выбор шаблона
-    template_options = {t["id"]: t["name"] for t in templates_data["templates"]}
-    selected_id = st.radio(
-        "Выберите шаблон для новых сессий:",
-        options=list(template_options.keys()),
-        format_func=lambda x: template_options[x],
-        index=list(template_options.keys()).index(selected_template["id"]),
-        key="template_selector"
-    )
-    
-    # Кнопка сохранения выбора шаблона
-    col_template1, col_template2 = st.columns([1, 2])
-    
-    with col_template1:
-        if st.button("💾 Сохранить выбор шаблона", type="primary", use_container_width=True):
-            updated_templates = update_selected_template(templates_data, selected_id)
-            if save_templates(updated_templates):
-                st.success(f"✅ Шаблон сохранен: {template_options[selected_id]}")
-                st.rerun()
-    
-    with col_template2:
-        # Просмотр промта выбранного шаблона
-        selected_prompt = next((t["prompt"] for t in templates_data["templates"] if t["id"] == selected_id), "")
+    if templates_data:
+        template_options = {t["id"]: t["name"] for t in templates_data}
+        selected_id = st.radio(
+            "Выберите шаблон для новых сессий:",
+            options=list(template_options.keys()),
+            format_func=lambda x: template_options[x],
+            index=list(template_options.keys()).index(selected_template["id"]) if selected_template else 0,
+            key="template_selector"
+        )
         
-        if st.button("👁️ Просмотр промта шаблона", use_container_width=True):
-            with st.expander("📝 Промт шаблона", expanded=True):
-                st.text_area("", value=selected_prompt, height=300, disabled=True, key="template_preview")
+        # Кнопка сохранения выбора шаблона
+        col_template1, col_template2 = st.columns([1, 2])
+        
+        with col_template1:
+            if st.button("💾 Сохранить выбор шаблона", type="primary", use_container_width=True):
+                updated_templates = update_selected_template(templates_data, selected_id)
+                if save_templates(updated_templates):
+                    st.success(f"✅ Шаблон сохранен: {template_options[selected_id]}")
+                    st.rerun()
+        
+        with col_template2:
+            # Просмотр промта выбранного шаблона
+            selected_prompt = next((t["prompt"] for t in templates_data if t["id"] == selected_id), "")
+            
+            if st.button("👁️ Просмотр промта шаблона", use_container_width=True):
+                with st.expander("📝 Промт шаблона", expanded=True):
+                    st.text_area("", value=selected_prompt, height=300, disabled=True, key="template_preview")
+    else:
+        st.info("📭 Нет доступных шаблонов")
     
     # Просмотр конфигурации
     st.markdown("---")
@@ -2379,13 +2360,16 @@ with tab3:
     st.markdown("---")
     st.markdown("### 📋 ВСЕ ШАБЛОНЫ")
     
-    for template in templates_data["templates"]:
-        is_selected = template.get("selected", False)
-        badge = "✅" if is_selected else ""
-        
-        with st.expander(f"{badge} {template['name']}", expanded=False):
-            st.caption(template["description"])
-            st.text_area("Промт:", value=template["prompt"], height=200, disabled=True, key=f"prompt_{template['id']}")
+    if templates_data:
+        for template in templates_data:
+            is_selected = template.get("selected", False)
+            badge = "✅" if is_selected else ""
+            
+            with st.expander(f"{badge} {template['name']}", expanded=False):
+                st.caption(template["description"])
+                st.text_area("Промт:", value=template["prompt"], height=200, disabled=True, key=f"prompt_{template['id']}")
+    else:
+        st.info("📭 Нет доступных шаблонов")
 
 # ==============================================
 # ВКЛАДКА 4: АДМИНИСТРИРОВАНИЕ
@@ -2828,8 +2812,11 @@ with st.sidebar:
     
     templates_data = load_templates()
     selected_template = get_selected_template(templates_data)
-    st.caption(f"{selected_template['name']}")
-    st.caption(f"{selected_template['description'][:60]}...")
+    if selected_template:
+        st.caption(f"{selected_template['name']}")
+        st.caption(f"{selected_template['description'][:60]}...")
+    else:
+        st.caption("📭 Нет шаблона")
     
     # Быстрые действия
     st.markdown("---")
@@ -2858,13 +2845,13 @@ with st.sidebar:
         # Получаем выбранный шаблон
         templates_data = load_templates()
         selected_template = get_selected_template(templates_data)
-        template_prompt = selected_template.get("prompt", "")
+        template_prompt = selected_template.get("prompt", "") if selected_template else ""
         
         # Создаем сессию
         session_path = session_manager.create_session(template_prompt=template_prompt)
         if session_path:
             st.session_state.current_session = str(session_path)
-            st.success(f"Создана сессия с шаблоном: {selected_template['name']}")
+            st.success(f"Создана сессия с шаблоном: {selected_template['name'] if selected_template else 'Без шаблона'}")
             st.rerun()
     
     # Административные действия
