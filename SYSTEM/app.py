@@ -20,7 +20,15 @@ def load_templates():
     """
     Загружает шаблоны из templates.json
     """
-    templates_path = Path(__file__).parent / "templates.json"
+    # Получаем путь из конфигурации или используем путь по умолчанию
+    templates_path_str = CONFIG.get("templates_path", "")
+    
+    if templates_path_str:
+        templates_path = Path(templates_path_str)
+    else:
+        # Если путь не указан в конфигурации, используем путь по умолчанию
+        project_dir = Path(__file__).parent
+        templates_path = project_dir / "templates.json"
     
     if templates_path.exists():
         try:
@@ -31,7 +39,8 @@ def load_templates():
         except Exception as e:
             print(f"❌ Ошибка загрузки шаблонов: {e}")
     
-    # Шаблоны по умолчанию
+    # Шаблоны по умолчанию если файл не найден или поврежден
+    print(f"⚠ Файл шаблонов не найден: {templates_path}")
     return {
         "templates": [
             {
@@ -49,8 +58,20 @@ def save_templates(templates_data):
     """
     Сохраняет шаблоны в templates.json
     """
+    # Получаем путь из конфигурации или используем путь по умолчанию
+    templates_path_str = CONFIG.get("templates_path", "")
+    
+    if templates_path_str:
+        templates_path = Path(templates_path_str)
+    else:
+        # Если путь не указан в конфигурации, используем путь по умолчанию
+        project_dir = Path(__file__).parent
+        templates_path = project_dir / "templates.json"
+    
     try:
-        templates_path = Path(__file__).parent / "templates.json"
+        # Создаем папку если не существует
+        templates_path.parent.mkdir(exist_ok=True, parents=True)
+        
         with open(templates_path, 'w', encoding='utf-8') as f:
             json.dump(templates_data, f, ensure_ascii=False, indent=2)
         print(f"✅ Шаблоны сохранены в {templates_path}")
@@ -97,6 +118,7 @@ def get_default_config():
         },
         "database_path": str(project_dir / "knowledge_database.db"),
         "sessions_path": str(project_dir / "sessions"),
+        "templates_path": str(project_dir / "templates.json"),
         "supported_extensions": [".md", ".txt"],
         "admin_enabled": True,
         "allow_database_export": True,
@@ -228,6 +250,16 @@ if not folder_status["all_exist"]:
     for folder_type, path in folder_status["missing"]:
         print(f"   - {folder_type}: {path}")
     print("ℹ️ Проверьте пути в файле config.json")
+
+# Проверяем доступность файла шаблонов
+templates_path_str = CONFIG.get("templates_path", "")
+if templates_path_str:
+    templates_path = Path(templates_path_str)
+    if not templates_path.exists():
+        print(f"⚠ Файл шаблонов не найден: {templates_path}")
+        # Создаем файл с шаблонами по умолчанию
+        templates_data = load_templates()  # Загрузит шаблоны по умолчанию
+        save_templates(templates_data)
 
 # ==============================================
 # КЛАСС ДЛЯ РАБОТЫ С РАЗНЫМИ ФОРМАТАМИ ФАЙЛОВ
