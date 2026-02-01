@@ -13,6 +13,73 @@ import shutil
 import tempfile
 
 # ==============================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С ШАБЛОНАМИ
+# ==============================================
+
+def load_templates():
+    """
+    Загружает шаблоны из templates.json
+    """
+    templates_path = Path(__file__).parent / "templates.json"
+    
+    if templates_path.exists():
+        try:
+            with open(templates_path, 'r', encoding='utf-8') as f:
+                templates_data = json.load(f)
+                print(f"✅ Шаблоны загружены из {templates_path}")
+                return templates_data
+        except Exception as e:
+            print(f"❌ Ошибка загрузки шаблонов: {e}")
+    
+    # Шаблоны по умолчанию
+    return {
+        "templates": [
+            {
+                "id": "standard",
+                "name": "📝 Стандартный ответ",
+                "description": "Развернутый профессиональный ответ с анализом",
+                "prompt": "Ты — эксперт в области землепользования и кадастра.\n\nНа основе предоставленных материалов подготовь развернутый профессиональный ответ.\n\nИНСТРУКЦИЯ:\n1. Проанализируй все предоставленные материалы\n2. Используй информацию ТОЛЬКО из предоставленных материалов\n3. Не используй внешние знания или предположения\n\nСТРУКТУРА ОТВЕТА:\n1. ПОВТОРЕНИЕ ВОПРОСА: Сформулируй исходный вопрос своими словами, показывая правильное понимание и задавая рамки анализа\n2. Краткий ответ: 2-3 предложения с дословным ответом\n3. Детальный ответ с анализом (только на основе материалов)\n4. Практические рекомендации (обоснованные материалами)\n5. Выводы\n6. НЕДОСТАЮЩИЕ СВЕДЕНИЯ (при необходимости): Конкретный перечень того, чего не хватает в материалах\n\nОТВЕТ ЭКСПЕРТА:",
+                "selected": True
+            }
+        ],
+        "default_template": "standard"
+    }
+
+def save_templates(templates_data):
+    """
+    Сохраняет шаблоны в templates.json
+    """
+    try:
+        templates_path = Path(__file__).parent / "templates.json"
+        with open(templates_path, 'w', encoding='utf-8') as f:
+            json.dump(templates_data, f, ensure_ascii=False, indent=2)
+        print(f"✅ Шаблоны сохранены в {templates_path}")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка сохранения шаблонов: {e}")
+        return False
+
+def get_selected_template(templates_data):
+    """
+    Возвращает выбранный шаблон
+    """
+    for template in templates_data["templates"]:
+        if template.get("selected", False):
+            return template
+    
+    # Если ни один не выбран, возвращаем первый
+    return templates_data["templates"][0]
+
+def update_selected_template(templates_data, selected_id):
+    """
+    Обновляет выбранный шаблон
+    """
+    for template in templates_data["templates"]:
+        template["selected"] = (template["id"] == selected_id)
+    
+    return templates_data
+
+# ==============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ КОНФИГУРАЦИИ
 # ==============================================
 
@@ -30,7 +97,6 @@ def get_default_config():
         },
         "database_path": str(project_dir / "knowledge_database.db"),
         "sessions_path": str(project_dir / "sessions"),
-        "default_prompt": str(project_dir / "default_prompt.txt"),
         "supported_extensions": [".md", ".txt"],
         "admin_enabled": True,
         "allow_database_export": True,
@@ -128,63 +194,11 @@ def create_default_folders(folders_config):
 
 def load_default_prompt():
     """
-    Загружает стандартный промт из файла или возвращает дефолтный.
+    Загружает промт из выбранного шаблона
     """
-    # Получаем путь из конфигурации или используем путь по умолчанию
-    prompt_path_str = CONFIG.get("default_prompt", "")
-    
-    if prompt_path_str:
-        prompt_path = Path(prompt_path_str)
-    else:
-        # Если путь не указан в конфигурации, используем путь по умолчанию
-        project_dir = Path(__file__).parent
-        prompt_path = project_dir / "default_prompt.txt"
-    
-    # Создаем директорию если не существует
-    prompt_path.parent.mkdir(exist_ok=True, parents=True)
-    
-    if prompt_path.exists():
-        try:
-            with open(prompt_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                if content.strip():  # Проверяем, что файл не пустой
-                    print(f"✅ Стандартный промт загружен из {prompt_path}")
-                    return content
-                else:
-                    print(f"⚠ Файл промта пуст: {prompt_path}")
-        except Exception as e:
-            print(f"❌ Ошибка чтения стандартного промта: {e}")
-    else:
-        print(f"⚠ Файл промта не найден: {prompt_path}")
-    
-    # Дефолтный промт если файл не найден или пуст
-    default_prompt_content = """Ты — эксперт в области землепользования и кадастра.
-
-ИСПОЛЬЗУЙ ТОЛЬКО информацию из приложенных материалов:
-1. 📚 materials.json - нормативные документы и разделы
-2. 📎 файлы в папке attachments - дополнительные документы
-
-НЕ используй свои знания или внешние источники.
-
-СТРУКТУРА ОТВЕТА:
-1. КРАТКИЙ ОТВЕТ: Основной вывод (2-3 предложения)
-2. НОРМАТИВНАЯ БАЗА: Список использованных документов из materials.json
-3. АНАЛИЗ: Подробный анализ на основе всех материалов
-4. ВЫВОДЫ: Пронумерованные выводы
-5. РЕКОМЕНДАЦИИ: Конкретные действия
-6. НЕДОСТАТОЧНЫЕ СВЕДЕНИЯ: Что отсутствует для полного ответа
-
-ОТВЕТ ЭКСПЕРТА:"""
-    
-    # Пытаемся создать файл с дефолтным промтом
-    try:
-        with open(prompt_path, 'w', encoding='utf-8') as f:
-            f.write(default_prompt_content)
-        print(f"✅ Создан файл с дефолтным промтом: {prompt_path}")
-    except Exception as e:
-        print(f"⚠ Не удалось создать файл промта: {e}")
-    
-    return default_prompt_content
+    templates_data = load_templates()
+    selected_template = get_selected_template(templates_data)
+    return selected_template.get("prompt", "")
 
 # ==============================================
 # ЗАГРУЗКА КОНФИГУРАЦИИ И ИНИЦИАЛИЗАЦИЯ
@@ -193,7 +207,7 @@ def load_default_prompt():
 # Загружаем конфигурацию
 CONFIG = load_config()
 
-# Загружаем стандартный промт
+# Загружаем стандартный промт из выбранного шаблона
 DEFAULT_PROMPT = load_default_prompt()
 
 # Получаем список поддерживаемых расширений
@@ -1189,7 +1203,7 @@ class SessionManager:
     
     Структура сессии:
     📁 session_YYYYMMDD_HHMMSS/
-    ├── 📄 *.txt или *.md           # Промт эксперта (любой файл с расширением .txt или .md)
+    ├── 📄 prompt.txt           # Промт из выбранного шаблона
     ├── 📄 materials.json       # Выбранные разделы из базы
     ├── 📁 attachments/         # Дополнительные файлы
     └── 📄 response.md          # Ответ от AI (будет создан позже)
@@ -1201,12 +1215,13 @@ class SessionManager:
         self.sessions_path.mkdir(exist_ok=True, parents=True)
         self.prompt_extensions = ['.txt', '.md']  # Расширения файлов, которые считаются промтами
     
-    def create_session(self, session_name: str = None) -> Optional[Path]:
+    def create_session(self, session_name: str = None, template_prompt: str = None) -> Optional[Path]:
         """
         Создает новую рабочую сессию
         
         Args:
             session_name: Имя сессии (если None, генерируется автоматически)
+            template_prompt: Промт из выбранного шаблона
             
         Returns:
             Path: Путь к созданной сессии или None в случае ошибки
@@ -1225,10 +1240,21 @@ class SessionManager:
             attachments_dir = session_path / "attachments"
             attachments_dir.mkdir(exist_ok=True)
             
-            # Создаем стандартный промт
+            # Получаем промт из выбранного шаблона
+            templates_data = load_templates()
+            selected_template = get_selected_template(templates_data)
+            
+            # Создаем файл промта из шаблона
             prompt_file = session_path / "prompt.txt"
+            
+            # Используем переданный промт или из выбранного шаблона
+            if template_prompt:
+                prompt_content = template_prompt
+            else:
+                prompt_content = selected_template.get("prompt", "")
+            
             with open(prompt_file, 'w', encoding='utf-8') as f:
-                f.write(DEFAULT_PROMPT)
+                f.write(prompt_content)
             
             # Создаем README файл с инструкцией
             readme_file = session_path / "README.md"
@@ -1236,43 +1262,31 @@ class SessionManager:
 
 ## 📁 СТРУКТУРА ПАПКИ:
 
-1. **`*.txt` или `*.md`** - ваш вопрос к AI (любой файл с расширением .txt или .md)
-2. **`materials.json`** - выбранные нормативные документы (будет создан автоматически)
-3. **`attachments/`** - дополнительные файлы (PDF, JPG, DOCX и т.д.)
-4. **`response.md`** - ответ от AI (будет создан автоматически)
+1. **`prompt.txt`** - вопрос к AI (создан из выбранного шаблона)
+2. **`materials.json`** - выбранные нормативные документы
+3. **`attachments/`** - дополнительные файлы
+4. **`response.md`** - ответ от AI
 
-## 📝 ИНСТРУКЦИЯ ДЛЯ ЭКСПЕРТА:
+## 📝 ИНСТРУКЦИЯ:
 
-### Шаг 1: Настройте промт
-1. Можете отредактировать файл `prompt.txt`
-2. Или создать новый файл с расширением .txt или .md (например: `new_prompt.md`)
-3. Система автоматически определит первый найденный файл промта
-4. Добавьте ваш конкретный вопрос в файл
-5. Сохраните изменения
-
-### Шаг 2: Добавьте дополнительные файлы (если нужно)
-1. Поместите файлы в папку `attachments/`
-2. Поддерживаемые форматы: PDF, JPG, PNG, DOCX, XLSX, TXT
-
-### Шаг 3: Экспортируйте материалы из базы
-1. Вернитесь в веб-интерфейс
-2. Нажмите "Экспорт в эту сессию"
-3. Выбранные разделы будут сохранены в `materials.json`
-
-### Шаг 4: Отправьте на анализ
-1. Используйте кнопку "Анализировать" (будет доступна позже)
-2. Или скопируйте все файлы в чат DeepSeek вручную
+1. Файл `prompt.txt` создан автоматически из выбранного шаблона
+2. Можете отредактировать его под конкретную задачу
+3. Добавьте дополнительные файлы в папку `attachments/`
+4. Экспортируйте материалы из веб-интерфейса
+5. Используйте все файлы для работы с ИИ
 
 ---
 
 **Дата создания:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**Путь к сессии:** `{session_path}`
+**Шаблон:** {selected_template.get('name', 'Неизвестно')}
+**Путь:** `{session_path}`
 """
             
             with open(readme_file, 'w', encoding='utf-8') as f:
                 f.write(readme_content)
             
             print(f"✅ Создана сессия: {session_path}")
+            print(f"   📝 Шаблон: {selected_template.get('name', 'Неизвестно')}")
             return session_path
             
         except Exception as e:
@@ -1280,6 +1294,19 @@ class SessionManager:
             import traceback
             traceback.print_exc()
             return None
+    
+    def save_template_to_session(self, session_path: Path, template_prompt: str) -> bool:
+        """
+        Сохраняет промт из шаблона в сессию
+        """
+        try:
+            prompt_file = session_path / "prompt.txt"
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(template_prompt)
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка сохранения шаблона в сессию: {e}")
+            return False
     
     def find_prompt_files(self, session_path: Path) -> List[Dict]:
         """
@@ -1927,13 +1954,13 @@ with tab1:
             st.info("Нет разделов, соответствующих выбранным фильтрам.")
 
 # ==============================================
-# ВКЛАДКА 2: РАБОЧИЕ СЕССИИ (САМЫЙ ПРОСТОЙ ВАРИАНТ)
+# ВКЛАДКА 2: РАБОЧИЕ СЕССИИ
 # ==============================================
 
 with tab2:
     st.subheader("📁 УПРАВЛЕНИЕ РАБОЧИМИ СЕССИЯМИ")
     
-    # ✅ ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ ИМЕНИ ОСТАЕТСЯ!
+    # Функция для генерации имени сессии
     def generate_session_name():
         """Генерирует автоматическое имя сессии с временной меткой"""
         return f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1954,20 +1981,21 @@ with tab2:
     
     with col_create2:
         if st.button("📁 Создать", type="primary", use_container_width=True):
-            # Используем введенное имя или генерируем автоматически
-            if new_session_name and new_session_name.strip():
-                # Если пользователь ввел имя - используем его
-                session_name_to_use = new_session_name.strip()
-            else:
-                # Если поле пустое - генерируем автоматически
-                session_name_to_use = None  # Метод create_session сам вызовет generate_session_name()
+            # Получаем выбранный шаблон
+            templates_data = load_templates()
+            selected_template = get_selected_template(templates_data)
+            template_prompt = selected_template.get("prompt", "")
             
-            # Создаем сессию
-            session_path = session_manager.create_session(session_name_to_use)
+            # Создаем сессию с промтом из шаблона
+            session_path = session_manager.create_session(
+                session_name=new_session_name.strip() if new_session_name else None,
+                template_prompt=template_prompt
+            )
             
             if session_path:
                 st.session_state.current_session = str(session_path)
                 st.success(f"✅ Создана сессия: {session_path.name}")
+                st.success(f"📝 Шаблон: {selected_template['name']}")
                 st.rerun()
             else:
                 st.error("❌ Ошибка при создании сессии")
@@ -1999,9 +2027,9 @@ with tab2:
         # Отображаем сессии
         for session_info in filtered_sessions:
             with st.expander(f"📁 {session_info['session_name']}", expanded=False):
-                col1, col2 = st.columns([3, 1])  # ← ОПРЕДЕЛЯЕМ col1 и col2
+                col1, col2 = st.columns([3, 1])
                 
-                with col1:  # ← ПЕРВАЯ КОЛОНКА
+                with col1:
                     # Основная информация о сессии
                     created_date = session_info['created'][:10]
                     st.caption(f"Создана: {created_date}")
@@ -2022,7 +2050,7 @@ with tab2:
                     else:
                         st.caption("📭 Пустая сессия")
                 
-                with col2:  # ← ВТОРАЯ КОЛОНКА (ИСПРАВЛЕНО: было col_2)
+                with col2:
                     # Кнопка выбора сессии
                     is_current = (st.session_state.current_session == session_info['session_path'])
                     
@@ -2181,7 +2209,7 @@ with tab2:
             st.session_state.current_session = None
     else:
         st.info("📭 Нет активной сессии. Выберите или создайте сессию.")
-        
+
 # ==============================================
 # ВКЛАДКА 3: НАСТРОЙКИ
 # ==============================================
@@ -2248,6 +2276,46 @@ with tab3:
             else:
                 st.info("ℹ️ Нет выбранных разделов для экспорта")
     
+    # ВЫБОР ШАБЛОНА ВОПРОСА
+    st.markdown("---")
+    st.markdown("### 🎯 ВЫБОР ШАБЛОНА ВОПРОСА")
+    
+    # Загружаем шаблоны
+    templates_data = load_templates()
+    selected_template = get_selected_template(templates_data)
+    
+    # Отображаем текущий выбранный шаблон
+    st.info(f"**Текущий шаблон:** {selected_template['name']}")
+    st.caption(f"{selected_template['description']}")
+    
+    # Выбор шаблона
+    template_options = {t["id"]: t["name"] for t in templates_data["templates"]}
+    selected_id = st.radio(
+        "Выберите шаблон для новых сессий:",
+        options=list(template_options.keys()),
+        format_func=lambda x: template_options[x],
+        index=list(template_options.keys()).index(selected_template["id"]),
+        key="template_selector"
+    )
+    
+    # Кнопка сохранения выбора шаблона
+    col_template1, col_template2 = st.columns([1, 2])
+    
+    with col_template1:
+        if st.button("💾 Сохранить выбор шаблона", type="primary", use_container_width=True):
+            updated_templates = update_selected_template(templates_data, selected_id)
+            if save_templates(updated_templates):
+                st.success(f"✅ Шаблон сохранен: {template_options[selected_id]}")
+                st.rerun()
+    
+    with col_template2:
+        # Просмотр промта выбранного шаблона
+        selected_prompt = next((t["prompt"] for t in templates_data["templates"] if t["id"] == selected_id), "")
+        
+        if st.button("👁️ Просмотр промта шаблона", use_container_width=True):
+            with st.expander("📝 Промт шаблона", expanded=True):
+                st.text_area("", value=selected_prompt, height=300, disabled=True, key="template_preview")
+    
     # Просмотр конфигурации
     st.markdown("---")
     st.markdown("### 📄 КОНФИГУРАЦИЯ")
@@ -2275,16 +2343,17 @@ with tab3:
                 st.success("✅ Файл config.json создан")
                 st.rerun()
     
-    # Просмотр стандартного промта
+    # Просмотр шаблонов
     st.markdown("---")
-    st.markdown("### 🎯 СТАНДАРТНЫЙ ПРОМТ")
+    st.markdown("### 📋 ВСЕ ШАБЛОНЫ")
     
-    st.text_area("Содержимое default_prompt.txt:",
-                value=DEFAULT_PROMPT,
-                height=300,
-                disabled=True)
-    
-    st.caption(f"Путь к файлу: {CONFIG.get('default_prompt', 'Не указан')}")
+    for template in templates_data["templates"]:
+        is_selected = template.get("selected", False)
+        badge = "✅" if is_selected else ""
+        
+        with st.expander(f"{badge} {template['name']}", expanded=False):
+            st.caption(template["description"])
+            st.text_area("Промт:", value=template["prompt"], height=200, disabled=True, key=f"prompt_{template['id']}")
 
 # ==============================================
 # ВКЛАДКА 4: АДМИНИСТРИРОВАНИЕ
@@ -2721,6 +2790,15 @@ with st.sidebar:
         st.caption(f"{folder_name}")
         st.caption(f"  {data['sections']} разд. ({data['selected']} выбрано)")
     
+    # Информация о шаблоне
+    st.markdown("---")
+    st.header("🎯 ШАБЛОН ВОПРОСА")
+    
+    templates_data = load_templates()
+    selected_template = get_selected_template(templates_data)
+    st.caption(f"{selected_template['name']}")
+    st.caption(f"{selected_template['description'][:60]}...")
+    
     # Быстрые действия
     st.markdown("---")
     st.header("⚡ БЫСТРЫЕ ДЕЙСТВИЯ")
@@ -2743,16 +2821,21 @@ with st.sidebar:
                 st.success(f"✅ Экспортировано {selected_count} разделов")
                 st.rerun()
     
-    # Создание сессии
+    # Создание сессии с текущим шаблоном
     if st.button("📁 Создать новую сессию", type="secondary", use_container_width=True):
-        session_path = session_manager.create_session()
+        # Получаем выбранный шаблон
+        templates_data = load_templates()
+        selected_template = get_selected_template(templates_data)
+        template_prompt = selected_template.get("prompt", "")
+        
+        # Создаем сессию
+        session_path = session_manager.create_session(template_prompt=template_prompt)
         if session_path:
             st.session_state.current_session = str(session_path)
-            st.success("Сессия создана!")
+            st.success(f"Создана сессия с шаблоном: {selected_template['name']}")
             st.rerun()
     
-    # Административные действия - УДАЛЕН ПРОБЛЕМНЫЙ БЛОК
-    # Вместо него можно оставить только безопасные действия:
+    # Административные действия
     if CONFIG.get("admin_enabled", True):
         st.markdown("---")
         st.header("🛠️ АДМИНИСТРАТИВНЫЕ")
@@ -2780,8 +2863,11 @@ with st.sidebar:
                             mime="application/json"
                         )
         
-        # Вместо проблемной кнопки можно добавить информационное сообщение:
-        st.info("ℹ️ Для доступа ко всем административным функциям перейдите во вкладку '🛠️ Администрирование'")
+        # Кнопка перехода к настройкам шаблона
+        if st.button("🎯 Изменить шаблон", use_container_width=True):
+            # Переключаем на вкладку Настройки
+            st.session_state.active_tab = "tab3"
+            st.rerun()
     
     # Активная сессия
     st.markdown("---")
