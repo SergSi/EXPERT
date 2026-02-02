@@ -865,7 +865,7 @@ class SimpleSectionDatabase:
         
         # РЕЖИМ ПО УМОЛЧАНИЮ: РАЗДЕЛЕНИЕ ПО ГЛАВАМ
         if not split_by_articles and not all_extract_items:
-            # Разделение по главам (старый код)
+            # Разделение по главам (обновленный код с требованием точки)
             print(f"  📖 Разделение по главам (по умолчанию)")
             
             lines = content_to_process.split('\n')
@@ -873,33 +873,37 @@ class SimpleSectionDatabase:
             current_title = doc_title
             current_type = "document"
             
-            # Паттерны для поиска глав
-            patterns = [
-                (r'^ГЛАВА\s+[IVXLCDM\d]+[\s\.\-:].*$', "chapter"),
-                (r'^Глава\s+[IVXLCDM\d]+[\s\.\-:].*$', "chapter"),
-                (r'^ГЛАВА\s+[0-9]+[\s\.\-:].*$', "chapter"),
-                (r'^Глава\s+[0-9]+[\s\.\-:].*$', "chapter"),
-            ]
+            # УНИВЕРСАЛЬНЫЙ ПАТТЕРН: Глава/ГЛАВА + номер + ТОЧКА + пробел + название
+            # Поддерживает: "Глава I.", "ГЛАВА 1.", "Глава 6.1.", "ГЛАВА 6.1.1."
+            chapter_pattern = re.compile(
+                r'^(ГЛАВА|Глава)\s+'      # "ГЛАВА" или "Глава"
+                r'([IVXLCDM]+|\d+(?:\.\d+)*)'  # номер: римские цифры или арабские (с подразделами)
+                r'\.\s+'                   # ТОЧКА после номера (обязательно!)
+                r'(.+)$'                   # название главы
+            )
             
             for line in lines:
-                is_header = False
-                for pattern, section_type in patterns:
-                    match = re.match(pattern, line.strip())
-                    if match:
-                        if current_section:
-                            sections.append({
-                                "title": current_title,
-                                "content": "\n".join(current_section).strip(),
-                                "type": current_type
-                            })
-                        
-                        current_title = line.strip()
-                        current_type = section_type
-                        current_section = []
-                        is_header = True
-                        break
+                line_stripped = line.strip()
+                match = chapter_pattern.match(line_stripped)
                 
-                if not is_header:
+                if match:
+                    # Нашли заголовок главы
+                    if current_section:
+                        sections.append({
+                            "title": current_title,
+                            "content": "\n".join(current_section).strip(),
+                            "type": current_type
+                        })
+                    
+                    chapter_word = match.group(1)  # "ГЛАВА" или "Глава"
+                    chapter_number = match.group(2)  # номер главы
+                    chapter_name = match.group(3).strip()  # название главы
+                    
+                    current_title = f"{chapter_word} {chapter_number}. {chapter_name}"
+                    current_type = "chapter"
+                    current_section = []
+                else:
+                    # Не заголовок главы - добавляем к текущему разделу
                     current_section.append(line)
             
             if current_section:
@@ -921,6 +925,7 @@ class SimpleSectionDatabase:
             
             return sections
         
+        # Остальной код остается без изменений...
         # РЕЖИМ РАЗДЕЛЕНИЯ ПО СТАТЬЯМ (с фильтрацией или без)
         lines = content_to_process.split('\n')
         

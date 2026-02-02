@@ -1,15 +1,15 @@
 {
   "created_at": "",
-  "last_updated": "2026-02-02T20:04:14.679128",
-  "total_sections": 226,
+  "last_updated": "2026-02-02T20:24:22.527844",
+  "total_sections": 189,
   "total_documents": 17,
   "by_folder": {
     "normative": {
       "documents": 8,
-      "sections": 179,
-      "words": 496546,
+      "sections": 142,
+      "words": 497256,
       "formats": {
-        ".txt": 179
+        ".txt": 142
       }
     },
     "structured": {
@@ -22,7 +22,7 @@
     }
   },
   "format_stats": {
-    ".txt": 226
+    ".txt": 189
   },
   "supported_extensions": [
     ".md",
