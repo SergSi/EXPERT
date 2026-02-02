@@ -252,7 +252,7 @@ if not Path(CONFIG["folders"]["normative"]).exists():
         for folder_type, path in created:
             print(f"   - {folder_type}: {path}")
 
-# Проверяем доступность папок
+# Проверяем доступность папки
 folder_status = validate_folders(CONFIG["folders"])
 if not folder_status["all_exist"]:
     print("⚠ Предупреждение: некоторые папки недоступны:")
@@ -578,20 +578,39 @@ class SimpleSectionDatabase:
         
         try:
             content_stripped = content.strip()
+            # Ищем YAML заголовок между ---
             if content_stripped.startswith('---'):
                 parts = content_stripped.split('---', 2)
                 if len(parts) >= 3:
                     yaml_content = parts[1].strip()
                     if yaml_content:
+                        # Загружаем YAML
                         metadata = yaml.safe_load(yaml_content) or {}
+                        if not isinstance(metadata, dict):
+                            metadata = {}
+                        
+                        # Обрабатываем extract_only и extract_ranges
+                        for key in ['extract_only', 'extract_ranges']:
+                            if key in metadata and isinstance(metadata[key], list):
+                                # Конвертируем все элементы в строки и очищаем от пробелов
+                                metadata[key] = [
+                                    str(item).strip() for item in metadata[key]
+                                ]
         except (yaml.YAMLError, AttributeError) as e:
             print(f"  ⚠ Не удалось прочитать YAML: {e}")
         
-        if not isinstance(metadata, dict):
-            metadata = {}
-        
         return metadata
     
+    def _normalize_article_number(self, article_num: str) -> str:
+        """
+        Нормализует номер статьи для сравнения
+        Примеры:
+        - "6" → "6"
+        - "6.1" → "6.1"
+        - "6.1.1" → "6.1.1"
+        """
+        return article_num.strip()        
+        
     def save_database(self):
         """Сохраняем базу на диск"""
         try:
@@ -711,7 +730,8 @@ class SimpleSectionDatabase:
                         cleaned_content,
                         file_path, 
                         folder_name, 
-                        document_title
+                        document_title,
+                        metadata  # Передаем метаданные в функцию разделения
                     )
                     
                     print(f" → {len(sections)} разделов")
@@ -780,11 +800,12 @@ class SimpleSectionDatabase:
         
         return all_sections
     
-    def _split_document_by_type(self, content: str, file_path: Path, folder_type: str, doc_title: str) -> List[Dict]:
+    def _split_document_by_type(self, content: str, file_path: Path, folder_type: str, 
+                               doc_title: str, metadata: Dict = None) -> List[Dict]:
         """Разбиваем документ на разделы в зависимости от типа папки"""
         
         if folder_type == "normative":
-            return self._split_normative_document(content, file_path, doc_title)
+            return self._split_normative_document(content, file_path, doc_title, metadata or {})
         elif folder_type == "methodology":
             return self._split_methodology_document(content, file_path, doc_title)
         elif folder_type == "structured":
@@ -798,8 +819,12 @@ class SimpleSectionDatabase:
                 "type": "full_document"
             }]
     
-    def _split_normative_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Разделение нормативных документов"""
+    def _split_normative_document(self, content: str, file_path: Path, doc_title: str, 
+                                metadata: Dict) -> List[Dict]:
+        """
+        Разделение нормативных документов с поддержкой YAML фильтрации статей
+        и разделением по главам по умолчанию
+        """
         sections = []
         
         if not content:
@@ -815,46 +840,250 @@ class SimpleSectionDatabase:
             if len(parts) >= 3:
                 content_to_process = parts[2].strip()
         
-        lines = content_to_process.split('\n')
-        current_section = []
-        current_title = doc_title
-        current_type = "document"
+        # Получаем параметры фильтрации из метаданных
+        split_by_articles = metadata.get('split_by', '').lower() == 'articles'
+        extract_ranges = metadata.get('extract_ranges', [])
+        extract_only = metadata.get('extract_only', [])
         
-        patterns = [
-            (r'^ГЛАВА\s+[IVXLCDM\d]+[\s\.\-:].*$', "chapter"),
-            (r'^Глава\s+[IVXLCDM\d]+[\s\.\-:].*$', "chapter"),
-            (r'^ГЛАВА\s+[0-9]+[\s\.\-:].*$', "chapter"),
-            (r'^Глава\s+[0-9]+[\s\.\-:].*$', "chapter"),
-        ]
+        # Объединяем extract_ranges и extract_only для удобства
+        all_extract_items = []
         
-        for line in lines:
-            is_header = False
-            for pattern, section_type in patterns:
-                match = re.match(pattern, line.strip())
-                if match:
-                    if current_section:
-                        sections.append({
-                            "title": current_title,
-                            "content": "\n".join(current_section).strip(),
-                            "type": current_type
-                        })
-                    
-                    current_title = line.strip()
-                    current_type = section_type
-                    current_section = []
-                    is_header = True
-                    break
+        # Добавляем элементы из extract_ranges
+        if extract_ranges:
+            all_extract_items.extend(extract_ranges)
+        
+        # Добавляем элементы из extract_only
+        if extract_only:
+            all_extract_items.extend(extract_only)
+        
+        # Конвертируем в строки если нужно
+        if all_extract_items:
+            all_extract_items = [
+                str(item).strip() if not isinstance(item, str) else item.strip()
+                for item in all_extract_items
+            ]
+        
+        # РЕЖИМ ПО УМОЛЧАНИЮ: РАЗДЕЛЕНИЕ ПО ГЛАВАМ
+        if not split_by_articles and not all_extract_items:
+            # Разделение по главам (старый код)
+            print(f"  📖 Разделение по главам (по умолчанию)")
             
-            if not is_header:
-                current_section.append(line)
+            lines = content_to_process.split('\n')
+            current_section = []
+            current_title = doc_title
+            current_type = "document"
+            
+            # Паттерны для поиска глав
+            patterns = [
+                (r'^ГЛАВА\s+[IVXLCDM\d]+[\s\.\-:].*$', "chapter"),
+                (r'^Глава\s+[IVXLCDM\d]+[\s\.\-:].*$', "chapter"),
+                (r'^ГЛАВА\s+[0-9]+[\s\.\-:].*$', "chapter"),
+                (r'^Глава\s+[0-9]+[\s\.\-:].*$', "chapter"),
+            ]
+            
+            for line in lines:
+                is_header = False
+                for pattern, section_type in patterns:
+                    match = re.match(pattern, line.strip())
+                    if match:
+                        if current_section:
+                            sections.append({
+                                "title": current_title,
+                                "content": "\n".join(current_section).strip(),
+                                "type": current_type
+                            })
+                        
+                        current_title = line.strip()
+                        current_type = section_type
+                        current_section = []
+                        is_header = True
+                        break
+                
+                if not is_header:
+                    current_section.append(line)
+            
+            if current_section:
+                sections.append({
+                    "title": current_title,
+                    "content": "\n".join(current_section).strip(),
+                    "type": current_type
+                })
+            
+            if not sections:
+                sections.append({
+                    "title": doc_title,
+                    "content": content_to_process.strip(),
+                    "type": "full_document"
+                })
+            
+            chapter_count = sum(1 for s in sections if s["type"] == "chapter")
+            print(f"    → Найдено {chapter_count} глав")
+            
+            return sections
         
-        if current_section:
+        # РЕЖИМ РАЗДЕЛЕНИЯ ПО СТАТЬЯМ (с фильтрацией или без)
+        lines = content_to_process.split('\n')
+        
+        # Собираем все статьи сначала
+        all_articles = []
+        current_article = None
+        
+        for i, line in enumerate(lines):
+            # Проверяем, является ли строка началом статьи
+            # Статья должна иметь формат: "Статья X.", "Статья X.Y.", "Статья X.Y.Z."
+            article_match = re.match(r'^Статья\s+(\d+[\.\d]*)\.\s*(.*)$', line.strip())
+            
+            if article_match:
+                # Если есть предыдущая статья, сохраняем ее
+                if current_article is not None:
+                    all_articles.append(current_article)
+                
+                article_number = article_match.group(1)
+                article_title = article_match.group(2).strip()
+                
+                current_article = {
+                    "number": article_number,
+                    "title": article_title,
+                    "lines": [line],
+                    "full_content": line + "\n"
+                }
+            elif current_article is not None:
+                # Добавляем строки к текущей статье
+                # Но проверяем, не начинается ли следующая статья
+                next_line_starts_article = False
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    next_match = re.match(r'^Статья\s+(\d+[\.\d]*)\.\s*(.*)$', next_line)
+                    if next_match:
+                        next_line_starts_article = True
+                
+                # Если текущая строка пустая и следующая строка - новая статья, 
+                # то заканчиваем текущую статью
+                if line.strip() == "" and next_line_starts_article:
+                    all_articles.append(current_article)
+                    current_article = None
+                else:
+                    current_article["lines"].append(line)
+                    current_article["full_content"] += line + "\n"
+        
+        # Добавляем последнюю статью
+        if current_article is not None:
+            all_articles.append(current_article)
+        
+        # Функция для проверки, нужно ли включать статью
+        def should_include_article(article_num, extract_items):
+            """Проверяет, нужно ли включать статью на основе списка извлечения"""
+            if not extract_items:
+                return True  # Если список пустой, включаем все
+            
+            article_num_str = str(article_num)
+            
+            # Пытаемся преобразовать номер статьи в число для сравнения
+            try:
+                if '.' in article_num_str:
+                    main_part = article_num_str.split('.')[0]
+                    sub_part = '.'.join(article_num_str.split('.')[1:])
+                    article_value = float(f"{main_part}.{sub_part}")
+                else:
+                    article_value = float(article_num_str)
+            except ValueError:
+                article_value = None
+            
+            for item in extract_items:
+                item_str = str(item).strip()
+                
+                # 1. Прямое сравнение строк
+                if item_str == article_num_str:
+                    return True
+                
+                # 2. Проверка диапазона (формат "X-Y")
+                if '-' in item_str:
+                    try:
+                        start_str, end_str = item_str.split('-')
+                        
+                        # Преобразуем границы диапазона
+                        if '.' in start_str:
+                            start_main = start_str.split('.')[0]
+                            start_sub = '.'.join(start_str.split('.')[1:])
+                            start_value = float(f"{start_main}.{start_sub}")
+                        else:
+                            start_value = float(start_str)
+                        
+                        if '.' in end_str:
+                            end_main = end_str.split('.')[0]
+                            end_sub = '.'.join(end_str.split('.')[1:])
+                            end_value = float(f"{end_main}.{end_sub}")
+                        else:
+                            end_value = float(end_str)
+                        
+                        if article_value is not None and start_value <= article_value <= end_value:
+                            return True
+                    except ValueError:
+                        continue
+                
+                # 3. Проверка частичного совпадения (для "5" и "5.1" - не считаем совпадением)
+                #    Но "5" должно совпадать с "5.0"
+                if '.' in article_num_str:
+                    main_part = article_num_str.split('.')[0]
+                    if main_part == item_str:
+                        # Только если это целое число, например "5" и "5.0"
+                        try:
+                            sub_part = float('0.' + '.'.join(article_num_str.split('.')[1:]))
+                            if abs(sub_part) < 0.001:  # Практически 0
+                                return True
+                        except:
+                            pass
+            
+            return False
+        
+        # Применяем фильтрацию если включен режим статей
+        filtered_articles = []
+        
+        if all_articles:
+            if split_by_articles:
+                if all_extract_items:
+                    print(f"  📑 Разделение по статьям с фильтрацией из YAML")
+                    
+                    for article in all_articles:
+                        article_num = article["number"]
+                        
+                        if should_include_article(article_num, all_extract_items):
+                            filtered_articles.append(article)
+                            print(f"    → Статья {article_num} включена")
+                    
+                    print(f"    → Отфильтровано: {len(filtered_articles)} из {len(all_articles)} статей")
+                else:
+                    # Разделение по статьям без фильтрации
+                    filtered_articles = all_articles
+                    print(f"  📑 Разделение по статьям (без фильтрации)")
+                    print(f"    → Найдено {len(all_articles)} статей")
+        
+        # Формируем разделы
+        if filtered_articles:
+            # Есть отфильтрованные статьи
+            for article in filtered_articles:
+                sections.append({
+                    "title": f"Статья {article['number']}. {article['title']}",
+                    "content": article["full_content"].strip(),
+                    "type": "article"
+                })
+        elif all_articles and split_by_articles:
+            # Есть статьи, включен режим разделения по статьям, но нет фильтров
+            for article in all_articles:
+                sections.append({
+                    "title": f"Статья {article['number']}. {article['title']}",
+                    "content": article["full_content"].strip(),
+                    "type": "article"
+                })
+        else:
+            # Если нет статей или не разделяем по статьям, сохраняем как есть
             sections.append({
-                "title": current_title,
-                "content": "\n".join(current_section).strip(),
-                "type": current_type
+                "title": doc_title,
+                "content": content_to_process.strip(),
+                "type": "full_document"
             })
         
+        # Если в результате нет разделов, создаем один раздел с полным документом
         if not sections:
             sections.append({
                 "title": doc_title,
@@ -863,62 +1092,113 @@ class SimpleSectionDatabase:
             })
         
         return sections
-    
-    def _split_methodology_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Разделение методических документов"""
-        sections = []
         
-        if not content:
-            return [{
-                "title": doc_title,
-                "content": "",
-                "type": "empty_document"
-            }]
-        
-        content_to_process = content
-        if content.strip().startswith('---'):
-            parts = content.split('---', 2)
-            if len(parts) >= 3:
-                content_to_process = parts[2].strip()
-        
-        lines = content_to_process.split('\n')
-        current_section = []
-        current_title = doc_title
-        current_type = "document"
-        
-        patterns = [
-            (r'^#\s+(.+)$', "h1"),
-            (r'^##\s+(.+)$', "h2"),
-        ]
-        
-        for line in lines:
-            is_header = False
-            for pattern, section_type in patterns:
-                match = re.match(pattern, line.strip())
-                if match:
-                    if current_section:
-                        sections.append({
-                            "title": current_title,
-                            "content": "\n".join(current_section).strip(),
-                            "type": current_type
-                        })
-                    
-                    current_title = match.group(1)
-                    current_type = section_type
-                    current_section = []
-                    is_header = True
-                    break
+        # Функция для проверки, попадает ли статья в указанный диапазон
+        def article_in_ranges(article_num, ranges):
+            """Проверяет, входит ли номер статьи в указанные диапазоны"""
+            article_num_float = float(article_num.replace('.', '', 1))
             
-            if not is_header:
-                current_section.append(line)
+            for range_str in ranges:
+                if '-' in range_str:
+                    # Диапазон вида "3-7" или "3.1-7.2"
+                    try:
+                        start_str, end_str = range_str.split('-')
+                        start = float(start_str.strip().replace('.', '', 1))
+                        end = float(end_str.strip().replace('.', '', 1))
+                        
+                        if start <= article_num_float <= end:
+                            return True
+                    except ValueError:
+                        continue
+                else:
+                    # Конкретный номер статьи
+                    try:
+                        target = float(range_str.strip().replace('.', '', 1))
+                        if abs(article_num_float - target) < 0.001:  # Сравнение с учетом float
+                            return True
+                    except ValueError:
+                        continue
+            return False
         
-        if current_section:
+        # Функция для проверки, является ли статья конкретной из списка
+        def article_in_list(article_num, article_list):
+            """Проверяет, есть ли номер статьи в списке"""
+            article_num_clean = str(article_num).strip()
+            
+            for item in article_list:
+                if isinstance(item, str):
+                    target_clean = item.strip()
+                    if target_clean == article_num_clean:
+                        return True
+                    
+                    # Проверяем частичное совпадение для номеров с точками
+                    if '.' in article_num_clean and '.' in target_clean:
+                        # Сравниваем по частям
+                        article_parts = article_num_clean.split('.')
+                        target_parts = target_clean.split('.')
+                        
+                        # Для случаев типа "6" и "6.1" - не считаем совпадением
+                        if len(article_parts) == len(target_parts):
+                            if all(a == t for a, t in zip(article_parts, target_parts)):
+                                return True
+            
+            return False
+        
+        # Применяем фильтрацию если указано
+        filtered_articles = []
+        
+        if split_by_articles and (extract_ranges or extract_only):
+            print(f"  📑 Разделение по статьям с фильтрацией из YAML")
+            
+            for article in all_articles:
+                article_num = article["number"]
+                include_article = False
+                
+                # Проверяем extract_only (приоритетный список)
+                if extract_only:
+                    if article_in_list(article_num, extract_only):
+                        include_article = True
+                        print(f"    → Статья {article_num} включена (extract_only)")
+                
+                # Проверяем extract_ranges (если не в extract_only)
+                if not include_article and extract_ranges:
+                    if article_in_ranges(article_num, extract_ranges):
+                        include_article = True
+                        print(f"    → Статья {article_num} включена (extract_ranges)")
+                
+                # Если ни один фильтр не указан, включаем все статьи
+                if not extract_only and not extract_ranges:
+                    include_article = True
+                
+                if include_article:
+                    filtered_articles.append(article)
+            
+            print(f"    → Отфильтровано: {len(filtered_articles)} из {len(all_articles)} статей")
+        
+        else:
+            # Без фильтрации - все статьи
+            filtered_articles = all_articles
+            if split_by_articles:
+                print(f"  📑 Разделение по статьям (без фильтрации)")
+                print(f"    → Найдено {len(all_articles)} статей")
+        
+        # Формируем разделы из отфильтрованных статей
+        if split_by_articles and filtered_articles:
+            for article in filtered_articles:
+                sections.append({
+                    "title": f"Статья {article['number']}. {article['title']}",
+                    "content": article["full_content"].strip(),
+                    "type": "article"
+                })
+        else:
+            # Если нет статей или не разделяем по статьям, сохраняем как есть
             sections.append({
-                "title": current_title,
-                "content": "\n".join(current_section).strip(),
-                "type": current_type
+                "title": doc_title,
+                "content": content_to_process.strip(),
+                "type": "full_document"
             })
         
+        # Если в результате нет разделов, создаем один раздел с полным документом
         if not sections:
             sections.append({
                 "title": doc_title,
