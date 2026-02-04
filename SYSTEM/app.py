@@ -997,15 +997,11 @@ if 'db' not in st.session_state:
 db = st.session_state.db
 session_manager = st.session_state.session_manager
 
-st.set_page_config(
-    page_title="Экспертная система: Выбор разделов",
-    page_icon="📚",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
-st.title("📚 ЭКСПЕРТНАЯ СИСТЕМА: ВЫБОР РАЗДЕЛОВ")
-st.markdown("---")
+#st.set_page_config(
+#    layout="wide",
+#    initial_sidebar_state="expanded"    
+#)
 
 tab1, tab2, tab3 = st.tabs([
     "📋 Выбор разделов",
