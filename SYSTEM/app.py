@@ -707,8 +707,8 @@ class SimpleSectionDatabase:
             selected = section.get("selected", False)
             scan_date = section.get("scan_date", "")
             
-            short_doc_title = doc_title[:40] + "..." if len(doc_title) > 40 else doc_title
-            short_section_title = section_title[:60] + "..." if len(section_title) > 60 else section_title
+            short_doc_title = doc_title[:80] + "..." if len(doc_title) > 80 else doc_title
+            short_section_title = section_title[:80] + "..." if len(section_title) > 80 else section_title
             
             if folder == "structured" and not section_title.startswith("["):
                 short_section_title = f"[{short_section_title}]"
@@ -720,12 +720,6 @@ class SimpleSectionDatabase:
             }.get(doc_ext.lower(), "📎")
             
             date_info = ""
-            if scan_date:
-                try:
-                    scan_date_obj = datetime.fromisoformat(scan_date.replace('Z', '+00:00'))
-                    date_info = f" (сканировано: {scan_date_obj.strftime('%d.%m.%Y')})"
-                except:
-                    pass
             
             display_data.append({
                 "id": section_id,
@@ -1017,33 +1011,20 @@ with tab1:
     if not display_data:
         st.info("База пуста. Нажмите 'Сканировать папки' в боковой панели.")
     else:
-        with st.container():
-            col1, col2 = st.columns([0.3, 0.7])
-            
-            with col1:
-                search_text = st.text_input("Поиск:", placeholder="По документу или разделу...", key="search_input_tab1")
-            
-            with col2:
-                doc_options = list(set(item["document_full"] for item in display_data))
-                doc_options.sort()
-                doc_filter = st.multiselect(
-                    "Фильтр по документу:",
-                    options=doc_options,
-                    format_func=lambda x: x[:40] + "..." if len(x) > 40 else x,
-                    help="Выберите конкретный документ",
-                    key="doc_filter_tab1"
-                )
+        # Удалено поле поиска, оставлен только фильтр по документам на всю ширину
+        doc_options = list(set(item["document_full"] for item in display_data))
+        doc_options.sort()
+        doc_filter = st.multiselect(
+            "Фильтр по документу:",
+            options=doc_options,
+            format_func=lambda x: x[:80] + "..." if len(x) > 80 else x,
+            help="Выберите конкретный документ",
+            key="doc_filter_tab1"
+        )
         
         filtered_data = display_data.copy()
         
-        if search_text:
-            search_lower = search_text.lower()
-            filtered_data = [
-                item for item in filtered_data
-                if (search_lower in item["document_full"].lower() or
-                    search_lower in item["section_full"].lower())
-            ]
-        
+        # Применяем фильтр по документам если он выбран
         if doc_filter:
             filtered_data = [item for item in filtered_data if item["document_full"] in doc_filter]
         
@@ -1094,7 +1075,7 @@ with tab1:
                         new_selected = st.checkbox(
                             "",
                             value=current_selected,
-                            key=f"select_{item['id']}_{search_text}_{doc_filter}",
+                            key=f"select_{item['id']}_{idx}",
                             label_visibility="collapsed"
                         )
                         
