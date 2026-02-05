@@ -528,7 +528,10 @@ class SimpleSectionDatabase:
     
     def _split_normative_document(self, content: str, file_path: Path, doc_title: str, 
                                 metadata: Dict) -> List[Dict]:
-        """Разделение нормативных документов"""
+        """
+        Разделение нормативных документов с поддержкой YAML фильтрации статей
+        и разделением по главам по умолчанию
+        """
         sections = []
         
         if not content:
@@ -544,48 +547,317 @@ class SimpleSectionDatabase:
             if len(parts) >= 3:
                 content_to_process = parts[2].strip()
         
-        # Разделение по главам
-        lines = content_to_process.split('\n')
-        current_section = []
-        current_title = doc_title
-        current_type = "document"
+        # Получаем параметры фильтрации из метаданных
+        split_by_articles = metadata.get('split_by', '').lower() == 'articles'
+        extract_ranges = metadata.get('extract_ranges', [])
+        extract_only = metadata.get('extract_only', [])
         
-        chapter_pattern = re.compile(
-            r'^(ГЛАВА|Глава)\s+'
-            r'([IVXLCDM]+|\d+(?:\.\d+)*)'
-            r'\.\s+'
-            r'(.+)$'
-        )
+        # Объединяем extract_ranges и extract_only для удобства
+        all_extract_items = []
         
-        for line in lines:
-            line_stripped = line.strip()
-            match = chapter_pattern.match(line_stripped)
+        # Добавляем элементы из extract_ranges
+        if extract_ranges:
+            all_extract_items.extend(extract_ranges)
+        
+        # Добавляем элементы из extract_only
+        if extract_only:
+            all_extract_items.extend(extract_only)
+        
+        # Конвертируем в строки если нужно
+        if all_extract_items:
+            all_extract_items = [
+                str(item).strip() if not isinstance(item, str) else item.strip()
+                for item in all_extract_items
+            ]
+        
+        # РЕЖИМ ПО УМОЛЧАНИЮ: РАЗДЕЛЕНИЕ ПО ГЛАВАМ
+        if not split_by_articles and not all_extract_items:
+            # Разделение по главам (обновленный код с требованием точки)
+            print(f"  📖 Разделение по главам (по умолчанию)")
             
-            if match:
-                if current_section:
-                    sections.append({
-                        "title": current_title,
-                        "content": "\n".join(current_section).strip(),
-                        "type": current_type
-                    })
+            lines = content_to_process.split('\n')
+            current_section = []
+            current_title = doc_title
+            current_type = "document"
+            
+            # УНИВЕРСАЛЬНЫЙ ПАТТЕРН: Глава/ГЛАВА + номер + ТОЧКА + пробел + название
+            # Поддерживает: "Глава I.", "ГЛАВА 1.", "Глава 6.1.", "ГЛАВА 6.1.1."
+            chapter_pattern = re.compile(
+                r'^(ГЛАВА|Глава)\s+'      # "ГЛАВА" или "Глава"
+                r'([IVXLCDM]+|\d+(?:\.\d+)*)'  # номер: римские цифры или арабские (с подразделами)
+                r'\.\s+'                   # ТОЧКА после номера (обязательно!)
+                r'(.+)$'                   # название главы
+            )
+            
+            for line in lines:
+                line_stripped = line.strip()
+                match = chapter_pattern.match(line_stripped)
                 
-                chapter_word = match.group(1)
-                chapter_number = match.group(2)
-                chapter_name = match.group(3).strip()
-                
-                current_title = f"{chapter_word} {chapter_number}. {chapter_name}"
-                current_type = "chapter"
-                current_section = []
-            else:
-                current_section.append(line)
+                if match:
+                    # Нашли заголовок главы
+                    if current_section:
+                        sections.append({
+                            "title": current_title,
+                            "content": "\n".join(current_section).strip(),
+                            "type": current_type
+                        })
+                    
+                    chapter_word = match.group(1)  # "ГЛАВА" или "Глава"
+                    chapter_number = match.group(2)  # номер главы
+                    chapter_name = match.group(3).strip()  # название главы
+                    
+                    current_title = f"{chapter_word} {chapter_number}. {chapter_name}"
+                    current_type = "chapter"
+                    current_section = []
+                else:
+                    # Не заголовок главы - добавляем к текущему разделу
+                    current_section.append(line)
+            
+            if current_section:
+                sections.append({
+                    "title": current_title,
+                    "content": "\n".join(current_section).strip(),
+                    "type": current_type
+                })
+            
+            if not sections:
+                sections.append({
+                    "title": doc_title,
+                    "content": content_to_process.strip(),
+                    "type": "full_document"
+                })
+            
+            chapter_count = sum(1 for s in sections if s["type"] == "chapter")
+            print(f"    → Найдено {chapter_count} глав")
+            
+            return sections
         
-        if current_section:
+        # РЕЖИМ РАЗДЕЛЕНИЯ ПО СТАТЬЯМ (с фильтрацией или без)
+        lines = content_to_process.split('\n')
+        
+        # Собираем все статьи сначала
+        all_articles = []
+        current_article = None
+        
+        for i, line in enumerate(lines):
+            # Проверяем, является ли строка началом статьи
+            # Статья должна иметь формат: "Статья X.", "Статья X.Y.", "Статья X.Y.Z."
+            article_match = re.match(r'^Статья\s+(\d+[\.\d]*)\.\s*(.*)$', line.strip())
+            
+            if article_match:
+                # Если есть предыдущая статья, сохраняем ее
+                if current_article is not None:
+                    all_articles.append(current_article)
+                
+                article_number = article_match.group(1)
+                article_title = article_match.group(2).strip()
+                
+                current_article = {
+                    "number": article_number,
+                    "title": article_title,
+                    "lines": [line],
+                    "full_content": line + "\n"
+                }
+            elif current_article is not None:
+                # Добавляем строки к текущей статье
+                # Но проверяем, не начинается ли следующая статья
+                next_line_starts_article = False
+                if i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    next_match = re.match(r'^Статья\s+(\d+[\.\d]*)\.\s*(.*)$', next_line)
+                    if next_match:
+                        next_line_starts_article = True
+                
+                # Если текущая строка пустая и следующая строка - новая статья, 
+                # то заканчиваем текущую статью
+                if line.strip() == "" and next_line_starts_article:
+                    all_articles.append(current_article)
+                    current_article = None
+                else:
+                    current_article["lines"].append(line)
+                    current_article["full_content"] += line + "\n"
+        
+        # Добавляем последнюю статью
+        if current_article is not None:
+            all_articles.append(current_article)
+        
+        # Функция для нормализации номера статьи
+        def normalize_article_number(num_str):
+            """Нормализует номер статьи для сравнения"""
+            # Убираем лишние пробелы
+            num_str = str(num_str).strip()
+            
+            # Преобразуем в float для численного сравнения
+            try:
+                # Заменяем точки, но сохраняем для дробных номеров
+                if '.' in num_str:
+                    parts = num_str.split('.')
+                    # Преобразуем каждую часть в целое число
+                    normalized = float(num_str)
+                else:
+                    normalized = float(num_str)
+                return normalized
+            except ValueError:
+                # Если не удалось преобразовать в число, возвращаем строку
+                return num_str
+        
+        # Функция для проверки, попадает ли статья в диапазон
+        def article_in_range(article_num, range_str):
+            """Проверяет, входит ли номер статьи в указанный диапазон"""
+            article_normalized = normalize_article_number(article_num)
+            
+            # Обработка диапазона "X-Y"
+            if '-' in range_str:
+                try:
+                    start_str, end_str = range_str.split('-')
+                    start = normalize_article_number(start_str.strip())
+                    end = normalize_article_number(end_str.strip())
+                    
+                    # Проверяем, является ли article_num числом
+                    if isinstance(article_normalized, (int, float)):
+                        return start <= article_normalized <= end
+                    else:
+                        # Для нечисловых номеров проверяем строковое совпадение
+                        return start_str.strip() == str(article_num).strip()
+                except (ValueError, AttributeError):
+                    return False
+            
+            # Обработка конкретного номера
+            else:
+                try:
+                    target = normalize_article_number(range_str.strip())
+                    if isinstance(article_normalized, (int, float)) and isinstance(target, (int, float)):
+                        return abs(article_normalized - target) < 0.001
+                    else:
+                        # Строковое сравнение
+                        return str(article_num).strip() == range_str.strip()
+                except (ValueError, AttributeError):
+                    return False
+        
+        # Функция для объединения статей из диапазона
+        def combine_articles_from_range(articles, range_str):
+            """Объединяет статьи из указанного диапазона в один раздел"""
+            combined_articles = []
+            
+            if '-' in range_str:
+                # Это диапазон
+                try:
+                    start_str, end_str = range_str.split('-')
+                    start = normalize_article_number(start_str.strip())
+                    end = normalize_article_number(end_str.strip())
+                    
+                    for article in articles:
+                        article_num = normalize_article_number(article["number"])
+                        if isinstance(article_num, (int, float)):
+                            if start <= article_num <= end:
+                                combined_articles.append(article)
+                except (ValueError, AttributeError):
+                    # Если не удалось разобрать диапазон, возвращаем пустой список
+                    pass
+            else:
+                # Это конкретная статья
+                for article in articles:
+                    if str(article["number"]).strip() == range_str.strip():
+                        combined_articles.append(article)
+                        break
+            
+            return combined_articles
+        
+        # Обрабатываем диапазоны для объединения
+        range_groups = []
+        single_articles = []
+        
+        # Разделяем элементы на диапазоны и одиночные статьи
+        for item in all_extract_items:
+            if isinstance(item, str):
+                if '-' in item:
+                    range_groups.append(item)
+                else:
+                    single_articles.append(item)
+        
+        # Формируем разделы
+        
+        if split_by_articles:
+            if range_groups or single_articles:
+                print(f"  📑 Разделение по статьям с фильтрацией из YAML")
+                
+                # Обрабатываем диапазоны
+                for range_str in range_groups:
+                    combined_articles = combine_articles_from_range(all_articles, range_str)
+                    
+                    if combined_articles:
+                        # Объединяем статьи из диапазона в один раздел
+                        combined_content = []
+                        article_numbers = []
+                        article_titles = []
+                        
+                        for article in combined_articles:
+                            combined_content.append(article["full_content"])
+                            article_numbers.append(article["number"])
+                            if article["title"]:
+                                article_titles.append(article["title"])
+                        
+                        # Формируем заголовок для объединенного раздела
+                        if '-' in range_str:
+                            title = f"Статьи {range_str}"
+                        else:
+                            title = f"Статья {range_str}"
+                        
+                        # Добавляем названия статей, если они есть
+                        if article_titles:
+                            unique_titles = []
+                            for title_text in article_titles:
+                                if title_text and title_text not in unique_titles:
+                                    unique_titles.append(title_text)
+                            
+                            if unique_titles:
+                                if len(unique_titles) == 1:
+                                    title += f". {unique_titles[0]}"
+                                else:
+                                    title += f". [{', '.join(unique_titles[:3])}" + \
+                                            (f"... (+{len(unique_titles)-3})" if len(unique_titles) > 3 else "") + "]"
+                        
+                        sections.append({
+                            "title": title,
+                            "content": "\n".join(combined_content).strip(),
+                            "type": "article_range"
+                        })
+                        print(f"    → Объединенный раздел: {range_str} ({len(combined_articles)} статей)")
+                
+                # Обрабатываем одиночные статьи
+                for article_num in single_articles:
+                    for article in all_articles:
+                        if str(article["number"]).strip() == article_num.strip():
+                            sections.append({
+                                "title": f"Статья {article['number']}. {article['title']}",
+                                "content": article["full_content"].strip(),
+                                "type": "article"
+                            })
+                            print(f"    → Статья {article['number']} включена")
+                            break
+                
+                print(f"    → Итого: {len(sections)} разделов")
+            
+            else:
+                # Разделение по статьям без фильтрации
+                for article in all_articles:
+                    sections.append({
+                        "title": f"Статья {article['number']}. {article['title']}",
+                        "content": article["full_content"].strip(),
+                        "type": "article"
+                    })
+                print(f"  📑 Разделение по статьям (без фильтрации)")
+                print(f"    → Найдено {len(all_articles)} статей")
+        
+        else:
+            # Если нет статей или не разделяем по статьям, сохраняем как есть
             sections.append({
-                "title": current_title,
-                "content": "\n".join(current_section).strip(),
-                "type": current_type
+                "title": doc_title,
+                "content": content_to_process.strip(),
+                "type": "full_document"
             })
         
+        # Если в результате нет разделов, создаем один раздел с полным документом
         if not sections:
             sections.append({
                 "title": doc_title,
@@ -707,8 +979,8 @@ class SimpleSectionDatabase:
             selected = section.get("selected", False)
             scan_date = section.get("scan_date", "")
             
-            short_doc_title = doc_title[:80] + "..." if len(doc_title) > 80 else doc_title
-            short_section_title = section_title[:80] + "..." if len(section_title) > 80 else section_title
+            short_doc_title = doc_title[:90] + "..." if len(doc_title) > 90 else doc_title
+            short_section_title = section_title[:90] + "..." if len(section_title) > 90 else section_title
             
             if folder == "structured" and not section_title.startswith("["):
                 short_section_title = f"[{short_section_title}]"
@@ -740,8 +1012,10 @@ class SimpleSectionDatabase:
         return display_data
     
     def update_selections(self, selected_ids: List[str]):
-        """Обновляет выбор эксперта"""
+        """Обновляет выбор эксперта и сразу сохраняет в базу"""
         updated_count = 0
+        
+        # Обновляем выбор во всех разделах
         for section in self.sections:
             section_id = section.get("id", "")
             old_selected = section.get("selected", False)
@@ -751,11 +1025,22 @@ class SimpleSectionDatabase:
                 section["selected"] = new_selected
                 updated_count += 1
         
+        # Сохраняем изменения в базу
         if updated_count > 0:
-            self.save_database()
-            print(f"💾 Обновлено {updated_count} выборов")
+            if self.save_database():
+                print(f"💾 Обновлено {updated_count} выборов")
+            else:
+                print(f"❌ Ошибка сохранения выборов")
         
         return updated_count
+    
+    def update_section_selection(self, section_id: str, selected: bool) -> bool:
+        """Обновляет выбор конкретного раздела"""
+        for section in self.sections:
+            if section.get("id") == section_id:
+                section["selected"] = selected
+                return True
+        return False
     
     def get_selected_sections(self) -> List[Dict]:
         """Возвращает выбранные экспертом разделы"""
@@ -770,8 +1055,10 @@ class SimpleSectionDatabase:
                 cleared_count += 1
         
         if cleared_count > 0:
-            self.save_database()
-            print(f"🗑️ Очищено {cleared_count} выборов")
+            if self.save_database():
+                print(f"🗑️ Очищено {cleared_count} выборов")
+            else:
+                print(f"❌ Ошибка очистки выборов")
         
         return cleared_count
     
@@ -987,10 +1274,20 @@ if 'db' not in st.session_state:
     st.session_state.session_manager = init_session_manager()
     st.session_state.current_session = None
     st.session_state.has_unsaved_changes = False
+    st.session_state.selected_sections = set()  # Храним выбранные ID в сессии
 
 db = st.session_state.db
 session_manager = st.session_state.session_manager
 
+# Функция для обновления выбранных разделов
+def update_selected_sections():
+    """Обновляет выбранные разделы из базы данных"""
+    selected_sections = db.get_selected_sections()
+    st.session_state.selected_sections = {section["id"] for section in selected_sections}
+
+# Инициализируем выбор при загрузке
+if 'selected_sections' not in st.session_state:
+    update_selected_sections()
 
 #st.set_page_config(
 #    layout="wide",
@@ -1035,28 +1332,34 @@ with tab1:
                 st.metric("Найдено", len(filtered_data), delta=f"из {len(display_data)}")
             
             with col_stat2:
-                selected_count = sum(1 for item in filtered_data if item["selected"])
-                total_selected = sum(1 for item in display_data if item["selected"])
+                selected_count = sum(1 for item in filtered_data if item["id"] in st.session_state.selected_sections)
+                total_selected = len(st.session_state.selected_sections)
                 st.metric("Выбрано", selected_count)
             
             with col_stat3:
                 if st.button("✅ Выбрать все", use_container_width=True, key="select_all_tab1"):
-                    for item in filtered_data:
-                        for section in db.sections:
-                            if section.get("id") == item["id"]:
-                                section["selected"] = True
+                    # Выбираем все отфильтрованные разделы
+                    section_ids = [item["id"] for item in filtered_data]
+                    for section_id in section_ids:
+                        if section_id not in st.session_state.selected_sections:
+                            st.session_state.selected_sections.add(section_id)
+                            db.update_section_selection(section_id, True)
+                    
                     st.session_state.has_unsaved_changes = True
-                    st.success(f"Выбрано {len(filtered_data)}")
+                    st.success(f"Выбрано {len(section_ids)} разделов")
                     st.rerun()
             
             with col_stat4:
                 if st.button("❌ Снять все", use_container_width=True, key="deselect_all_tab1"):
-                    for item in filtered_data:
-                        for section in db.sections:
-                            if section.get("id") == item["id"]:
-                                section["selected"] = False
+                    # Снимаем выбор со всех отфильтрованных разделов
+                    section_ids = [item["id"] for item in filtered_data]
+                    for section_id in section_ids:
+                        if section_id in st.session_state.selected_sections:
+                            st.session_state.selected_sections.remove(section_id)
+                            db.update_section_selection(section_id, False)
+                    
                     st.session_state.has_unsaved_changes = True
-                    st.info(f"Снято {len(filtered_data)}")
+                    st.info(f"Снято {len(section_ids)} разделов")
                     st.rerun()
         
         if filtered_data:
@@ -1065,13 +1368,13 @@ with tab1:
             with st.container():
                 for idx, item in enumerate(filtered_data):
                     css_class = "section-item"
-                    if item["selected"]:
+                    if item["id"] in st.session_state.selected_sections:
                         css_class += " selected-section"
                     
                     col_check, col_content = st.columns([0.4, 11.6])
                     
                     with col_check:
-                        current_selected = item["selected"]
+                        current_selected = item["id"] in st.session_state.selected_sections
                         new_selected = st.checkbox(
                             "",
                             value=current_selected,
@@ -1080,11 +1383,14 @@ with tab1:
                         )
                         
                         if new_selected != current_selected:
-                            for section in db.sections:
-                                if section.get("id") == item["id"]:
-                                    section["selected"] = new_selected
-                                    changes_made = True
-                                    break
+                            if new_selected:
+                                st.session_state.selected_sections.add(item["id"])
+                            else:
+                                st.session_state.selected_sections.discard(item["id"])
+                            
+                            # Обновляем в базе данных
+                            db.update_section_selection(item["id"], new_selected)
+                            changes_made = True
                     
                     with col_content:
                         st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
@@ -1106,7 +1412,7 @@ with tab1:
                         meta_info = []
                         meta_info.append(f"Формат: {item.get('extension', '.txt')}")
                         meta_info.append(f"Слов: {item['words']}")
-                        if item["selected"]:
+                        if item["id"] in st.session_state.selected_sections:
                             meta_info.append("✅ Выбрано")
                         
                         st.markdown(f'<div class="section-meta">{" • ".join(meta_info)}</div>', 
@@ -1134,10 +1440,14 @@ with tab1:
                     
                     if st.button("💾 Сохранить выбор", type="primary", 
                                disabled=save_disabled, use_container_width=True, key="save_tab1"):
-                        db.save_database()
-                        st.success("✅ Выбор сохранен!")
-                        st.session_state.has_unsaved_changes = False
-                        st.rerun()
+                        # Сохраняем базу
+                        if db.save_database():
+                            st.success("✅ Выбор сохранен!")
+                            st.session_state.has_unsaved_changes = False
+                            update_selected_sections()  # Обновляем состояние
+                            st.rerun()
+                        else:
+                            st.error("❌ Ошибка сохранения")
                 
                 with col_manage2:
                     if st.session_state.has_unsaved_changes:
@@ -1233,7 +1543,7 @@ with tab2:
                 col_act1, col_act2, col_act3 = st.columns(3)
                 
                 with col_act1:
-                    selected_count = sum(1 for section in db.sections if section.get("selected", False))
+                    selected_count = len(st.session_state.selected_sections)
                     
                     if selected_count > 0:
                         if st.button("📤 Экспорт", 
@@ -1325,7 +1635,7 @@ with tab2:
                 else:
                     st.info("📎 Нет папки для вложений")
             
-            selected_count = sum(1 for section in db.sections if section.get("selected", False))
+            selected_count = len(st.session_state.selected_sections)
             
             if selected_count > 0:
                 if st.button("🚀 БЫСТРЫЙ ЭКСПОРТ В АКТИВНУЮ СЕССИЮ", 
@@ -1369,6 +1679,7 @@ with tab3:
             with st.spinner("Сканирую папки..."):
                 db.scan_and_build_database()
                 st.success("✅ База данных обновлена!")
+                update_selected_sections()  # Обновляем выбор после сканирования
                 st.rerun()
     
     with col_db2:
@@ -1376,6 +1687,7 @@ with tab3:
             cleared = db.clear_selections()
             if cleared > 0:
                 st.success(f"✅ Очищено {cleared} выборов")
+                st.session_state.selected_sections.clear()  # Очищаем выбор в сессии
                 st.session_state.has_unsaved_changes = False
                 st.rerun()
             else:
@@ -1383,7 +1695,7 @@ with tab3:
     
     with col_db3:
         if st.button("📤 Экспорт выбранных", type="secondary", use_container_width=True):
-            selected_count = sum(1 for section in db.sections if section.get("selected", False))
+            selected_count = len(st.session_state.selected_sections)
             if selected_count > 0:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 export_path = Path(CONFIG["sessions_path"]) / f"selected_sections_{timestamp}.json"
@@ -1495,7 +1807,7 @@ with st.sidebar:
     st.metric("Всего разделов", stats["total_sections"])
     st.metric("Всего документов", stats["total_documents"])
     
-    selected_count = stats["selected_sections"]
+    selected_count = len(st.session_state.selected_sections)
     st.metric("Выбрано разделов", selected_count)
     
     st.markdown("---")
@@ -1514,10 +1826,13 @@ with st.sidebar:
     
     if st.session_state.has_unsaved_changes:
         if st.button("💾 Сохранить выбор", type="primary", use_container_width=True):
-            db.save_database()
-            st.success("Сохранено!")
-            st.session_state.has_unsaved_changes = False
-            st.rerun()
+            if db.save_database():
+                st.success("Сохранено!")
+                st.session_state.has_unsaved_changes = False
+                update_selected_sections()
+                st.rerun()
+            else:
+                st.error("Ошибка сохранения!")
     
     if st.session_state.current_session and selected_count > 0:
         if st.button("📤 Экспорт в активную сессию", type="secondary", use_container_width=True):
@@ -1547,6 +1862,7 @@ with st.sidebar:
         with st.spinner("Сканирую..."):
             db.scan_and_build_database()
             st.success("Сканирование завершено!")
+            update_selected_sections()
             st.rerun()
     
     if selected_count > 0:

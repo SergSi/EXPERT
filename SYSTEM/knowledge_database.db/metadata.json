@@ -1,32 +1,7 @@
 {
   "created_at": "",
-  "last_updated": "2026-02-04T19:21:54.015055",
-  "total_sections": 174,
-  "total_documents": 17,
-  "by_folder": {
-    "normative": {
-      "documents": 8,
-      "sections": 127,
-      "words": 363953,
-      "formats": {
-        ".txt": 127
-      }
-    },
-    "structured": {
-      "documents": 9,
-      "sections": 47,
-      "words": 84692,
-      "formats": {
-        ".txt": 47
-      }
-    }
-  },
-  "format_stats": {
-    ".txt": 174
-  },
-  "supported_extensions": [
-    ".md",
-    ".txt"
-  ],
+  "last_updated": "2026-02-05T17:19:52.194679",
+  "total_sections": 182,
+  "total_documents": 21,
   "version": "1.0"
 }
