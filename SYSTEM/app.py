@@ -1200,6 +1200,42 @@ class SessionManager:
         except Exception as e:
             print(f"❌ Ошибка экспорта в сессию: {e}")
             return False
+        
+    def replace_prompt_from_template(self, session_path: Path, template_id: str) -> bool:
+        """Заменяет prompt.txt в сессии на промт из выбранного шаблона"""
+        try:
+            # Загружаем шаблоны
+            templates_data = load_templates()
+            
+            # Находим выбранный шаблон
+            selected_template = None
+            for template in templates_data:
+                if template["id"] == template_id:
+                    selected_template = template
+                    break
+            
+            if not selected_template:
+                print(f"❌ Шаблон с ID '{template_id}' не найден")
+                return False
+            
+            # Проверяем существование сессии
+            if not session_path.exists() or not session_path.is_dir():
+                print(f"❌ Сессия не найдена: {session_path}")
+                return False
+            
+            # Создаем/перезаписываем файл prompt.txt
+            prompt_file = session_path / "prompt.txt"
+            prompt_content = selected_template.get("prompt", "")
+            
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(prompt_content)
+            
+            print(f"✅ Промт в сессии {session_path.name} заменен на шаблон '{selected_template['name']}'")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Ошибка замены промта: {e}")
+            return False        
 
 # ==============================================
 # ЗАГРУЗКА КОНФИГУРАЦИИ
@@ -1274,25 +1310,57 @@ if 'db' not in st.session_state:
     st.session_state.session_manager = init_session_manager()
     st.session_state.current_session = None
     st.session_state.has_unsaved_changes = False
-    st.session_state.selected_sections = set()  # Храним выбранные ID в сессии
 
 db = st.session_state.db
 session_manager = st.session_state.session_manager
 
-# Функция для обновления выбранных разделов
+# ==============================================
+# ФУНКЦИИ СИНХРОНИЗАЦИИ ВЫБРАННЫХ РАЗДЕЛОВ
+# ==============================================
+
+def sync_selected_sections():
+    """
+    Синхронизирует st.session_state.selected_sections с базой данных.
+    Вызывается при каждой загрузке приложения и после операций с выбором.
+    """
+    selected_from_db = db.get_selected_sections()
+    db_selected_ids = {section["id"] for section in selected_from_db}
+    
+    # Инициализируем состояние, если его нет
+    if 'selected_sections' not in st.session_state:
+        st.session_state.selected_sections = set()
+    
+    # Добавляем ID из базы, которых нет в сессии
+    for section_id in db_selected_ids:
+        if section_id not in st.session_state.selected_sections:
+            st.session_state.selected_sections.add(section_id)
+    
+    # Удаляем ID из сессии, которых нет в базе
+    session_ids_to_remove = []
+    for section_id in st.session_state.selected_sections:
+        if section_id not in db_selected_ids:
+            session_ids_to_remove.append(section_id)
+    
+    for section_id in session_ids_to_remove:
+        st.session_state.selected_sections.discard(section_id)
+    
+    return len(st.session_state.selected_sections)
+
 def update_selected_sections():
-    """Обновляет выбранные разделы из базы данных"""
+    """Обновляет выбранные разделы из базы данных (полная перезапись)"""
     selected_sections = db.get_selected_sections()
     st.session_state.selected_sections = {section["id"] for section in selected_sections}
 
-# Инициализируем выбор при загрузке
+# Инициализируем выбор при загрузке с синхронизацией
 if 'selected_sections' not in st.session_state:
     update_selected_sections()
+else:
+    # При каждом запуске синхронизируем состояние с базой
+    sync_selected_sections()
 
-#st.set_page_config(
-#    layout="wide",
-#    initial_sidebar_state="expanded"    
-#)
+# ==============================================
+# ОСНОВНОЙ ИНТЕРФЕЙС
+# ==============================================
 
 tab1, tab2, tab3 = st.tabs([
     "📋 Выбор разделов",
@@ -1308,7 +1376,7 @@ with tab1:
     if not display_data:
         st.info("База пуста. Нажмите 'Сканировать папки' в боковой панели.")
     else:
-        # Удалено поле поиска, оставлен только фильтр по документам на всю ширину
+        # Фильтр по документам
         doc_options = list(set(item["document_full"] for item in display_data))
         doc_options.sort()
         doc_filter = st.multiselect(
@@ -1345,7 +1413,11 @@ with tab1:
                             st.session_state.selected_sections.add(section_id)
                             db.update_section_selection(section_id, True)
                     
-                    st.session_state.has_unsaved_changes = True
+                    # Сохраняем изменения в базе
+                    db.save_database()
+                    # Синхронизируем состояние
+                    sync_selected_sections()
+                    st.session_state.has_unsaved_changes = False
                     st.success(f"Выбрано {len(section_ids)} разделов")
                     st.rerun()
             
@@ -1358,7 +1430,11 @@ with tab1:
                             st.session_state.selected_sections.remove(section_id)
                             db.update_section_selection(section_id, False)
                     
-                    st.session_state.has_unsaved_changes = True
+                    # Сохраняем изменения в базе
+                    db.save_database()
+                    # Синхронизируем состояние
+                    sync_selected_sections()
+                    st.session_state.has_unsaved_changes = False
                     st.info(f"Снято {len(section_ids)} разделов")
                     st.rerun()
         
@@ -1391,6 +1467,7 @@ with tab1:
                             # Обновляем в базе данных
                             db.update_section_selection(item["id"], new_selected)
                             changes_made = True
+                            st.session_state.has_unsaved_changes = True
                     
                     with col_content:
                         st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
@@ -1442,9 +1519,10 @@ with tab1:
                                disabled=save_disabled, use_container_width=True, key="save_tab1"):
                         # Сохраняем базу
                         if db.save_database():
+                            # Синхронизируем состояние
+                            sync_selected_sections()
                             st.success("✅ Выбор сохранен!")
                             st.session_state.has_unsaved_changes = False
-                            update_selected_sections()  # Обновляем состояние
                             st.rerun()
                         else:
                             st.error("❌ Ошибка сохранения")
@@ -1666,7 +1744,9 @@ with tab3:
         st.metric("Всего разделов в базе", stats["total_sections"])
     
     with col_info2:
-        st.metric("Выбрано разделов", stats["selected_sections"])
+        # Синхронизируем перед отображением, чтобы гарантировать актуальность
+        sync_selected_sections()
+        st.metric("Выбрано разделов", len(st.session_state.selected_sections))
     
     st.markdown("---")
     
@@ -1678,16 +1758,18 @@ with tab3:
         if st.button("🔍 Сканировать папки", type="primary", use_container_width=True):
             with st.spinner("Сканирую папки..."):
                 db.scan_and_build_database()
+                # Синхронизируем состояние после сканирования
+                sync_selected_sections()
                 st.success("✅ База данных обновлена!")
-                update_selected_sections()  # Обновляем выбор после сканирования
                 st.rerun()
     
     with col_db2:
         if st.button("🗑️ Очистить все выборы", type="secondary", use_container_width=True):
             cleared = db.clear_selections()
             if cleared > 0:
+                # Синхронизируем состояние после очистки
+                sync_selected_sections()
                 st.success(f"✅ Очищено {cleared} выборов")
-                st.session_state.selected_sections.clear()  # Очищаем выбор в сессии
                 st.session_state.has_unsaved_changes = False
                 st.rerun()
             else:
@@ -1802,6 +1884,9 @@ with tab3:
 with st.sidebar:
     st.header("📊 СТАТИСТИКА")
     
+    # Синхронизируем перед отображением
+    sync_selected_sections()
+    
     stats = db.get_database_stats()
     
     st.metric("Всего разделов", stats["total_sections"])
@@ -1827,9 +1912,10 @@ with st.sidebar:
     if st.session_state.has_unsaved_changes:
         if st.button("💾 Сохранить выбор", type="primary", use_container_width=True):
             if db.save_database():
+                # Синхронизируем после сохранения
+                sync_selected_sections()
                 st.success("Сохранено!")
                 st.session_state.has_unsaved_changes = False
-                update_selected_sections()
                 st.rerun()
             else:
                 st.error("Ошибка сохранения!")
@@ -1861,8 +1947,9 @@ with st.sidebar:
                help="Ручное сканирование папок с документами"):
         with st.spinner("Сканирую..."):
             db.scan_and_build_database()
+            # Синхронизируем после сканирования
+            sync_selected_sections()
             st.success("Сканирование завершено!")
-            update_selected_sections()
             st.rerun()
     
     if selected_count > 0:
@@ -1879,12 +1966,8 @@ with st.sidebar:
                         data=f.read(),
                         file_name=export_path.name,
                         mime="application/json"
-                    )
-    
-    if st.button("🎯 Изменить шаблон", use_container_width=True):
-        st.session_state.active_tab = "tab3"
-        st.rerun()
-    
+                    )    
+  
     st.markdown("---")
     
     if st.session_state.current_session:
@@ -1911,6 +1994,34 @@ with st.sidebar:
             st.session_state.current_session = None
     else:
         st.info("📭 Нет активной сессии")
+
+    st.markdown("---")
+    
+    # Кнопка обновления промта сессии
+    if st.session_state.current_session:
+        current_path = Path(st.session_state.current_session)
+        
+        if current_path.exists() and st.button("🔄 Обновить промт сессии", 
+                                             use_container_width=True,
+                                             type="secondary",
+                                             help="Заменит prompt.txt на промт из текущего шаблона"):
+            
+            templates_data = load_templates()
+            selected_template = get_selected_template(templates_data)
+            
+            if selected_template:
+                success = session_manager.replace_prompt_from_template(
+                    current_path, 
+                    selected_template["id"]
+                )
+                
+                if success:
+                    st.success(f"✅ Промт обновлен!")
+                    st.rerun()
+                else:
+                    st.error("❌ Ошибка")
+            else:
+                st.warning("⚠️ Нет шаблона")        
 
 print("\n" + "="*60)
 print("🚀 Экспертная система запущена!")
