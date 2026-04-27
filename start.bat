@@ -1,39 +1,39 @@
 @echo off
-cd /d D:\YandexDisk\WORK\EXPERT
+cd /d D:\EXPERT
 
 echo ========================================
-echo Запуск экспертной системы
+echo Launching Expert System
 echo ========================================
 
-REM Проверяем наличие виртуального окружения
+REM Check if virtual environment exists
 if not exist "venv\Scripts\activate.bat" (
-    echo Создаём виртуальное окружение...
+    echo Creating virtual environment...
     python -m venv venv
     if errorlevel 1 (
-        echo ОШИБКА: Python не найден!
-        echo Установите Python с python.org
+        echo ERROR: Python not found!
+        echo Please install Python from python.org
         pause
         exit /b 1
     )
 )
 
-REM Активируем виртуальное окружение
+REM Activate virtual environment
 call venv\Scripts\activate.bat
 
-REM Проверяем и устанавливаем зависимости
+REM Check and install dependencies
 pip show streamlit >nul 2>&1
 if errorlevel 1 (
-    echo Устанавливаем зависимости...
+    echo Installing dependencies...
     pip install -r requirements.txt
 )
 
-REM Создаём папку data, если её нет
+REM Create data folder if it doesn't exist
 if not exist "data" mkdir data
 
-REM Запускаем приложение
+REM Launch the application
 echo.
-echo Приложение запускается...
-echo Откройте в браузере: http://localhost:8501
+echo Application is starting...
+echo Open in browser: http://localhost:8501
 echo.
 streamlit run app.py
 
