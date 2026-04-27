@@ -20,7 +20,7 @@
 ### 2. Откройте командную строку в папке проекта
 
 ```bash
-cd D:\YandexDisk\WORK\EXPERT
+cd D:\EXPERT
 ```
 
 ### 3. Создайте виртуальное окружение (однократно)
@@ -234,7 +234,7 @@ extract_only:                         # конкретные элементы
 
 ```batch
 @echo off
-cd /d D:\YandexDisk\WORK\EXPERT
+cd /d D:\EXPERT
 call venv\Scripts\activate.bat
 streamlit run app.py
 pause
