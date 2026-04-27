@@ -100,8 +100,8 @@ def get_default_config():
             "structured": str(project_dir / "STRUCTURED"),
             "expertise": str(project_dir / "EXPERTISE")
         },
-        "database_path": str(project_dir / "knowledge_database.db"),
-        "sessions_path": str(project_dir / "sessions"),
+        "database_path": str(project_dir / "data" / "knowledge_database.db"),
+        "sessions_path": str(project_dir / "data" / "sessions"),
         "templates_path": str(project_dir / "templates.json"),
         "supported_extensions": [".md", ".txt"],
         "admin_enabled": True,
