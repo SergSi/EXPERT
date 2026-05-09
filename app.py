@@ -1452,7 +1452,7 @@ with tab1:
                     with col_check:
                         current_selected = item["id"] in st.session_state.selected_sections
                         new_selected = st.checkbox(
-                            "",
+                            "Выбрать",
                             value=current_selected,
                             key=f"select_{item['id']}_{idx}",
                             label_visibility="collapsed"
