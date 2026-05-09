@@ -1136,7 +1136,7 @@ class SessionManager:
             selected_template = get_selected_template(templates_data)
             
             # Создаем только один файл промта
-            prompt_file = session_path / "prompt.txt"
+            prompt_file = session_path / "prompt.md"
             
             if template_prompt:
                 prompt_content = template_prompt
@@ -1159,7 +1159,7 @@ class SessionManager:
             "session_name": session_path.name,
             "session_path": str(session_path),
             "created": datetime.fromtimestamp(session_path.stat().st_ctime).isoformat(),
-            "has_prompt": (session_path / "prompt.txt").exists(),
+            "has_prompt": (session_path / "prompt.md").exists(),
             "has_materials": (session_path / "materials.json").exists(),
             "has_attachments": (session_path / "attachments").exists()
         }
@@ -1202,7 +1202,7 @@ class SessionManager:
             return False
         
     def replace_prompt_from_template(self, session_path: Path, template_id: str) -> bool:
-        """Заменяет prompt.txt в сессии на промт из выбранного шаблона"""
+        """Заменяет prompt.md в сессии на промт из выбранного шаблона"""
         try:
             # Загружаем шаблоны
             templates_data = load_templates()
@@ -1223,8 +1223,8 @@ class SessionManager:
                 print(f"❌ Сессия не найдена: {session_path}")
                 return False
             
-            # Создаем/перезаписываем файл prompt.txt
-            prompt_file = session_path / "prompt.txt"
+            # Создаем/перезаписываем файл prompt.md
+            prompt_file = session_path / "prompt.md"
             prompt_content = selected_template.get("prompt", "")
             
             with open(prompt_file, 'w', encoding='utf-8') as f:
@@ -1646,7 +1646,7 @@ with tab2:
                         st.info(f"**Содержимое сессии:** {session_info['session_name']}")
                         
                         if session_info['has_prompt']:
-                            st.write("**Промт:** присутствует (prompt.txt)")
+                            st.write("**Промт:** присутствует (prompt.md)")
                         else:
                             st.write("**Промт:** отсутствует")
                         
@@ -2004,7 +2004,7 @@ with st.sidebar:
         if current_path.exists() and st.button("🔄 Обновить промт сессии", 
                                              use_container_width=True,
                                              type="secondary",
-                                             help="Заменит prompt.txt на промт из текущего шаблона"):
+                                             help="Заменит prompt.md на промт из текущего шаблона"):
             
             templates_data = load_templates()
             selected_template = get_selected_template(templates_data)
