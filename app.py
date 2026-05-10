@@ -754,7 +754,7 @@ class SimpleSectionDatabase:
         return sections
     
     def _split_by_articles_with_filter(self, content: str, doc_title: str, extract_items: List[str]) -> List[Dict]:
-        """Разделяет документ на статьи с фильтрацией"""
+        """Разделяет документ на статьи с фильтрацией (с поддержкой версионных номеров)"""
         sections = []
         lines = content.split('\n')
         
@@ -763,7 +763,7 @@ class SimpleSectionDatabase:
         current_article = None
         
         for line in lines:
-            article_match = re.match(r'^Статья\s+(\d+[\.\d]*)\.\s*(.*)$', line.strip())
+            article_match = re.match(r'^Статья\s+(\d+[\.\d]*)\s*\.\s*(.*)$', line.strip())
             
             if article_match:
                 if current_article:
@@ -783,13 +783,46 @@ class SimpleSectionDatabase:
         if current_article:
             all_articles.append(current_article)
         
-        # Если нет статей, возвращаем весь документ
         if not all_articles:
             return [{
                 "title": doc_title,
                 "content": content.strip(),
                 "type": "full_document"
             }]
+        
+        # Функция сравнения версий
+        def version_compare(v1: str, v2: str) -> int:
+            parts1 = [int(x) for x in v1.split('.')]
+            parts2 = [int(x) for x in v2.split('.')]
+            
+            for i in range(max(len(parts1), len(parts2))):
+                p1 = parts1[i] if i < len(parts1) else 0
+                p2 = parts2[i] if i < len(parts2) else 0
+                if p1 != p2:
+                    return -1 if p1 < p2 else 1
+            return 0
+        
+        # Функция проверки вхождения статьи в диапазон
+        def is_article_in_range(article_num: str, range_str: str) -> bool:
+            if '-' not in range_str:
+                return article_num == range_str
+            
+            start, end = range_str.split('-')
+            start = start.strip()
+            end = end.strip()
+            
+            return version_compare(start, article_num) <= 0 and version_compare(article_num, end) <= 0
+        
+        # Функция проверки вхождения статьи в список
+        def is_article_selected(article_num: str) -> bool:
+            for item in extract_items:
+                if '-' in item:
+                    if is_article_in_range(article_num, item):
+                        return True
+                else:
+                    if article_num == item:
+                        return True
+            return False
         
         # Если нет фильтрации, возвращаем все статьи
         if not extract_items:
@@ -801,30 +834,6 @@ class SimpleSectionDatabase:
                 })
             print(f"    → Найдено {len(all_articles)} статей")
             return sections
-        
-        # Функция проверки вхождения статьи в список
-        def is_article_selected(article_num: str) -> bool:
-            for item in extract_items:
-                if '-' in item:  # Диапазон
-                    try:
-                        start, end = item.split('-')
-                        # Преобразуем в числа для сравнения
-                        try:
-                            num_val = float(article_num)
-                            start_val = float(start.strip())
-                            end_val = float(end.strip())
-                            if start_val <= num_val <= end_val:
-                                return True
-                        except ValueError:
-                            # Если не числа, сравниваем как строки
-                            if start.strip() <= article_num <= end.strip():
-                                return True
-                    except:
-                        pass
-                else:  # Конкретная статья
-                    if article_num == item:
-                        return True
-            return False
         
         # Отбираем нужные статьи
         for article in all_articles:
