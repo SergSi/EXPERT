@@ -754,16 +754,36 @@ class SimpleSectionDatabase:
         return sections
     
     def _split_by_articles_with_filter(self, content: str, doc_title: str, extract_items: List[str]) -> List[Dict]:
-        """Разделяет документ на статьи с фильтрацией (с поддержкой версионных номеров)"""
+        """Разделяет документ на статьи с фильтрацией"""
         sections = []
         lines = content.split('\n')
+        
+        # Ключевые слова для пропуска
+        skip_keywords = [
+            'дополнена', 'изменена', 'утратила силу', 
+            'вступает в силу', 'См. текст', 'ГАРАНТ',
+            'Федеральным законом', 'Федеральный закон от',
+            'Информация об изменениях', 'предыдущую редакцию',
+            'Пункт', 'Подпункт', 'Часть', 'Абзац', 'абзац'
+        ]
         
         # Собираем все статьи
         all_articles = []
         current_article = None
         
         for line in lines:
-            article_match = re.match(r'^Статья\s+(\d+[\.\d]*)\s*\.\s*(.*)$', line.strip())
+            line_stripped = line.strip()
+            
+            # Пропускаем строки с ключевыми словами
+            skip = False
+            for keyword in skip_keywords:
+                if keyword.lower() in line_stripped.lower():
+                    skip = True
+                    break
+            if skip:
+                continue
+            
+            article_match = re.match(r'^Статья\s+(\d+[\.\d]*)\s*\.\s*(.*)$', line_stripped)
             
             if article_match:
                 if current_article:
@@ -772,11 +792,21 @@ class SimpleSectionDatabase:
                 article_number = article_match.group(1)
                 article_title = article_match.group(2).strip()
                 
-                current_article = {
-                    "number": article_number,
-                    "title": article_title,
-                    "full_content": line + "\n"
-                }
+                # Ещё раз проверяем название на ключевые слова
+                skip_title = False
+                for keyword in skip_keywords:
+                    if keyword.lower() in article_title.lower():
+                        skip_title = True
+                        break
+                
+                if not skip_title:
+                    current_article = {
+                        "number": article_number,
+                        "title": article_title,
+                        "full_content": line + "\n"
+                    }
+                else:
+                    current_article = None
             elif current_article:
                 current_article["full_content"] += line + "\n"
         
@@ -853,8 +883,8 @@ class SimpleSectionDatabase:
                 "type": "full_document"
             })
         
-        return sections
-    
+        return sections        
+   
     def _split_methodology_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
         """Разделение методических документов"""
         return [{
