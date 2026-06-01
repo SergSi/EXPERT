@@ -5,10 +5,7 @@
     "structured": "STRUCTURED",
     "expertise": "EXPERTISE"
   },
-  "database_path": "data/knowledge_database.db",
-  "sessions_path": "data/sessions",
-  "templates_path": "templates.json",
-  "supported_extensions": [".md", ".txt"],
-  "admin_enabled": true,
-  "max_upload_size_mb": 100
+  "data_path": "data",
+  "sets_file": "sets.json",
+  "supported_extensions": [".md", ".txt"]
 }

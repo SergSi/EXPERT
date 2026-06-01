@@ -1,88 +1,11 @@
 import os
 import re
 import json
-import yaml
 import chardet
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
-import uuid
 import streamlit as st
-import shutil
-
-# ==============================================
-# ФУНКЦИИ ДЛЯ РАБОТЫ С ШАБЛОНАМИ
-# ==============================================
-
-def load_templates():
-    """Загружает шаблоны из templates.json"""
-    templates_path_str = CONFIG.get("templates_path", "")
-    
-    if templates_path_str:
-        templates_path = Path(templates_path_str)
-    else:
-        project_dir = Path(__file__).parent
-        templates_path = project_dir / "templates.json"
-    
-    if templates_path.exists():
-        try:
-            with open(templates_path, 'r', encoding='utf-8') as f:
-                templates_data = json.load(f)
-                print(f"✅ Шаблоны загружены из {templates_path}")
-                if isinstance(templates_data, list):
-                    return templates_data
-                else:
-                    if "templates" in templates_data:
-                        templates_list = templates_data["templates"]
-                        if templates_list and len(templates_list) > 0:
-                            return templates_list
-        except Exception as e:
-            print(f"❌ Ошибка загрузки шаблонов: {e}")
-    
-    return [
-        {
-            "id": "standard",
-            "name": "📝 Стандартный ответ",
-            "description": "Развернутый профессиональный ответ с анализом",
-            "prompt": "Ты — эксперт в области землепользования и кадастра.\n\nНа основе предоставленных материалов подготовь развернутый профессиональный ответ.",
-            "selected": True
-        }
-    ]
-
-def save_templates(templates_data):
-    """Сохраняет шаблоны в templates.json"""
-    templates_path_str = CONFIG.get("templates_path", "")
-    
-    if templates_path_str:
-        templates_path = Path(templates_path_str)
-    else:
-        project_dir = Path(__file__).parent
-        templates_path = project_dir / "templates.json"
-    
-    try:
-        templates_path.parent.mkdir(exist_ok=True, parents=True)
-        with open(templates_path, 'w', encoding='utf-8') as f:
-            json.dump(templates_data, f, ensure_ascii=False, indent=2)
-        print(f"✅ Шаблоны сохранены в {templates_path}")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка сохранения шаблонов: {e}")
-        return False
-
-def get_selected_template(templates_data):
-    """Возвращает выбранный шаблон"""
-    if not templates_data:
-        return None
-    for template in templates_data:
-        if template.get("selected", False):
-            return template
-    return templates_data[0] if templates_data else None
-
-def update_selected_template(templates_data, selected_id):
-    """Обновляет выбранный шаблон"""
-    for template in templates_data:
-        template["selected"] = (template["id"] == selected_id)
-    return templates_data
 
 # ==============================================
 # КОНФИГУРАЦИЯ
@@ -91,8 +14,6 @@ def update_selected_template(templates_data, selected_id):
 def get_default_config():
     """Возвращает конфигурацию по умолчанию"""
     project_dir = Path(__file__).parent
-    project_dir.mkdir(exist_ok=True)
-    
     return {
         "folders": {
             "normative": str(project_dir / "NORMATIVE"),
@@ -100,12 +21,9 @@ def get_default_config():
             "structured": str(project_dir / "STRUCTURED"),
             "expertise": str(project_dir / "EXPERTISE")
         },
-        "database_path": str(project_dir / "data" / "knowledge_database.db"),
-        "sessions_path": str(project_dir / "data" / "sessions"),
-        "templates_path": str(project_dir / "templates.json"),
-        "supported_extensions": [".md", ".txt"],
-        "admin_enabled": True,
-        "max_upload_size_mb": 100
+        "data_path": str(project_dir / "data"),
+        "sets_file": str(project_dir / "sets.json"),
+        "supported_extensions": [".md", ".txt"]
     }
 
 def load_config():
@@ -116,82 +34,28 @@ def load_config():
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-                print(f"✅ Конфигурация загружена из {config_path}")
                 default_config = get_default_config()
                 for key, value in default_config.items():
                     if key not in config:
-                        print(f"⚠ В конфигурации отсутствует ключ: {key}. Используется значение по умолчанию.")
                         config[key] = value
                 return config
-        except json.JSONDecodeError as e:
-            print(f"❌ Ошибка в формате JSON: {e}")
-            return get_default_config()
-        except Exception as e:
-            print(f"❌ Ошибка загрузки конфигурации: {e}")
+        except Exception:
             return get_default_config()
     
-    print("⚠ Файл config.json не найден. Используются значения по умолчанию.")
     return get_default_config()
 
-def save_config(config):
-    """Сохраняет конфигурацию в JSON файл"""
-    try:
-        config_path = Path(__file__).parent / "config.json"
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        print(f"✅ Конфигурация сохранена в {config_path}")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка сохранения конфигурации: {e}")
-        return False
+CONFIG = load_config()
 
-def validate_folders(folders_config):
-    """Проверяет существование папки из конфигурации"""
-    missing = []
-    existing = []
-    
-    for folder_type, folder_path in folders_config.items():
-        if not folder_path or folder_path.strip() == "":
-            missing.append((folder_type, "(пустой путь)"))
-            continue
-            
-        path = Path(folder_path)
-        if path.exists() and path.is_dir():
-            existing.append((folder_type, folder_path))
-        else:
-            missing.append((folder_type, folder_path))
-    
-    return {
-        "all_exist": len(missing) == 0,
-        "existing": existing,
-        "missing": missing
-    }
-
-def create_default_folders(folders_config):
-    """Создает папки по умолчанию если они не существуют"""
-    created = []
-    for folder_type, folder_path in folders_config.items():
-        if folder_path:
-            path = Path(folder_path)
-            if not path.exists():
-                try:
-                    path.mkdir(parents=True, exist_ok=True)
-                    created.append((folder_type, folder_path))
-                except Exception as e:
-                    print(f"❌ Не удалось создать папку {folder_path}: {e}")
-    return created
-
-def load_default_prompt():
-    """Загружает промт из выбранного шаблона"""
-    templates_data = load_templates()
-    selected_template = get_selected_template(templates_data)
-    return selected_template.get("prompt", "") if selected_template else ""
+# Создаем необходимые папки
+Path(CONFIG["data_path"]).mkdir(exist_ok=True, parents=True)
+for folder_path in CONFIG["folders"].values():
+    Path(folder_path).mkdir(exist_ok=True, parents=True)
 
 # ==============================================
-# КЛАСС ДЛЯ РАБОТЫ С ФАЙЛАМИ
+# ЧТЕНИЕ ФАЙЛОВ
 # ==============================================
 
-class FileFormatReader:
+class FileReader:
     """Класс для чтения текстовых файлов"""
     
     @staticmethod
@@ -202,19 +66,9 @@ class FileFormatReader:
         
         extension = file_path.suffix.lower()
         
-        try:
-            if extension in ['.md', '.txt']:
-                return FileFormatReader._read_text(file_path)
-            else:
-                print(f"⚠ Неподдерживаемый формат файла: {extension}")
-                return None
-        except Exception as e:
-            print(f"❌ Ошибка чтения файла {file_path}: {e}")
+        if extension not in ['.md', '.txt']:
             return None
-    
-    @staticmethod
-    def _read_text(file_path: Path) -> Optional[str]:
-        """Читает текстовые файлы с определением кодировки"""
+        
         try:
             with open(file_path, 'rb') as f:
                 raw_data = f.read()
@@ -222,489 +76,71 @@ class FileFormatReader:
             if not raw_data:
                 return ""
             
+            # Определяем кодировку
             encoding_result = chardet.detect(raw_data)
-            encoding = encoding_result['encoding']
-            confidence = encoding_result['confidence']
-            
-            if not encoding or confidence < 0.7:
-                encodings_to_try = ['utf-8', 'utf-16-le', 'utf-16-be', 'cp1251', 'iso-8859-1']
-            else:
-                encodings_to_try = [encoding, 'utf-8', 'utf-16-le', 'utf-16-be']
-            
-            for enc in encodings_to_try:
-                try:
-                    if enc.startswith('utf-16'):
-                        if len(raw_data) >= 2:
-                            bom = raw_data[:2]
-                            if bom == b'\xff\xfe':
-                                content = raw_data[2:].decode('utf-16-le')
-                                return content
-                            elif bom == b'\xfe\xff':
-                                content = raw_data[2:].decode('utf-16-be')
-                                return content
-                            else:
-                                try:
-                                    content = raw_data.decode('utf-16-le')
-                                    return content
-                                except:
-                                    content = raw_data.decode('utf-16-be')
-                                    return content
-                    
-                    content = raw_data.decode(enc, errors='strict')
-                    return content
-                except (UnicodeDecodeError, LookupError):
-                    continue
+            encoding = encoding_result.get('encoding', 'utf-8')
             
             try:
-                return raw_data.decode('utf-8', errors='ignore')
+                return raw_data.decode(encoding, errors='ignore')
             except:
-                return raw_data.decode('latin-1', errors='ignore')
+                return raw_data.decode('utf-8', errors='ignore')
                 
         except Exception as e:
-            print(f"❌ Ошибка чтения текстового файла {file_path}: {e}")
+            print(f"Ошибка чтения {file_path}: {e}")
             return None
 
 # ==============================================
-# СИСТЕМА УПРАВЛЕНИЯ БАЗОЙ РАЗДЕЛОВ
+# РАЗБОР НОРМАТИВНЫХ ДОКУМЕНТОВ
 # ==============================================
 
-class SimpleSectionDatabase:
-    """Простая система для создания и управления базой разделов"""
+class NormativeParser:
+    """Парсер нормативных документов"""
     
-    def __init__(self):
-        self.db_path = Path(CONFIG["database_path"])
-        self.sections_db = self.db_path / "sections.json"
-        self.metadata_db = self.db_path / "metadata.json"
-        self.file_reader = FileFormatReader()
-        
-        self.db_path.mkdir(exist_ok=True, parents=True)
-        self.sections = self._load_sections()
-        self.metadata = self._load_metadata()
-        
-        # Инициализируем split_rules.json
-        self._init_split_rules()
-    
-    def _init_split_rules(self):
-        """Инициализирует файл split_rules.json если его нет"""
-        rules_path = self.db_path / "split_rules.json"
-        if not rules_path.exists():
-            try:
-                with open(rules_path, 'w', encoding='utf-8') as f:
-                    json.dump({}, f, ensure_ascii=False, indent=2)
-                print(f"✅ Создан пустой {rules_path}")
-            except Exception as e:
-                print(f"❌ Ошибка создания split_rules.json: {e}")
-    
-    def _load_sections(self) -> List[Dict]:
-        """Загружаем базу разделов"""
-        if self.sections_db.exists():
-            try:
-                with open(self.sections_db, 'r', encoding='utf-8') as f:
-                    sections = json.load(f)
-                    print(f"✅ База разделов загружена из {self.sections_db}")
-                    return sections
-            except json.JSONDecodeError as e:
-                print(f"❌ Ошибка JSON в файле разделов: {e}")
-                return []
-            except Exception as e:
-                print(f"❌ Ошибка загрузки базы разделов: {e}")
-                return []
-        else:
-            print("📁 База разделов не найдена, создается новая")
-            return []
-    
-    def _load_metadata(self) -> Dict:
-        """Загружаем метаданные базы"""
-        if self.metadata_db.exists():
-            try:
-                with open(self.metadata_db, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-                    print(f"✅ Метаданные базы загружены из {self.metadata_db}")
-                    return metadata
-            except json.JSONDecodeError as e:
-                print(f"❌ Ошибка JSON в файле метаданных: {e}")
-                return self._create_default_metadata()
-            except Exception as e:
-                print(f"❌ Ошибка загрузки метаданных: {e}")
-                return self._create_default_metadata()
-        else:
-            print("📁 Метаданные базы не найдены, создаются новые")
-            return self._create_default_metadata()
-    
-    def _create_default_metadata(self) -> Dict:
-        """Создает метаданные по умолчанию"""
-        return {
-            "created_at": datetime.now().isoformat(),
-            "last_updated": datetime.now().isoformat(),
-            "total_sections": 0,
-            "total_documents": 0,
-            "version": "1.0"
-        }
-    
-    def _clean_text_from_comments(self, text: str) -> str:
-        """Очищает текст от примечаний КонсультантПлюс/ГАРАНТ"""
+    @staticmethod
+    def clean_text(text: str) -> str:
+        """Очищает текст от примечаний и специальных символов"""
         if not text:
             return text
         
-        cleaned_text = text
-        
-        consultant_patterns = [
+        # Очистка от примечаний КонсультантПлюс
+        patterns = [
             r'КонсультантПлюс: примечание\.[^\n]*\n',
             r'\[Консультант[^\]]*примечание[^\]]*\][^\n]*\n',
-        ]
-        
-        for pattern in consultant_patterns:
-            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
-        
-        garant_patterns = [
             r'ГАРАНТ:\s*\n\s*См\. [^\n]*\n',
             r'ГАРАНТ:\s*\n\s*[^\n]*См\. [^\n]*\n',
         ]
         
-        for pattern in garant_patterns:
-            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE)
+        for pattern in patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.MULTILINE)
         
-        return cleaned_text.strip()
+        # Очистка специальных символов
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = text.replace('\xad', '')
+        text = text.replace('\xa0', ' ')
+        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        return text.strip()
     
-    def _clean_special_characters(self, text: str) -> str:
-        """Очищает текст от специальных символов"""
-        if not text:
-            return text
-        
-        cleaned = re.sub(r'[ \t]+', ' ', text)
-        cleaned = cleaned.replace('\xad', '')
-        cleaned = cleaned.replace('\xa0', ' ')
-        cleaned = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned)
-        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-        cleaned = cleaned.strip()
-        
-        return cleaned
-    
-    def _extract_yaml_metadata(self, content: str) -> Dict:
-        """Извлекает метаданные из YAML заголовка"""
-        metadata = {}
-        
-        try:
-            content_stripped = content.strip()
-            if content_stripped.startswith('---'):
-                parts = content_stripped.split('---', 2)
-                if len(parts) >= 3:
-                    yaml_content = parts[1].strip()
-                    if yaml_content:
-                        metadata = yaml.safe_load(yaml_content) or {}
-                        if not isinstance(metadata, dict):
-                            metadata = {}
-        except (yaml.YAMLError, AttributeError) as e:
-            print(f"  ⚠ Не удалось прочитать YAML: {e}")
-        
-        return metadata
-    
-    def _remove_yaml_header(self, content: str) -> str:
-        """Удаляет YAML заголовок из контента"""
-        content_stripped = content.strip()
-        if content_stripped.startswith('---'):
-            parts = content_stripped.split('---', 2)
-            if len(parts) >= 3:
-                return parts[2].strip()
-        return content
-    
-    def _load_split_rules(self) -> Dict:
-        """Загружает правила разбиения из split_rules.json"""
-        rules_path = self.db_path / "split_rules.json"
-        
-        if rules_path.exists():
-            try:
-                with open(rules_path, 'r', encoding='utf-8') as f:
-                    rules = json.load(f)
-                    return rules
-            except Exception as e:
-                print(f"❌ Ошибка загрузки split_rules.json: {e}")
-                return {}
-        return {}
-
-    def _save_split_rules(self, rules: Dict) -> bool:
-        """Сохраняет правила разбиения в split_rules.json"""
-        rules_path = self.db_path / "split_rules.json"
-        
-        try:
-            with open(rules_path, 'w', encoding='utf-8') as f:
-                json.dump(rules, f, ensure_ascii=False, indent=2)
-            return True
-        except Exception as e:
-            print(f"❌ Ошибка сохранения split_rules.json: {e}")
-            return False
-
-    def update_split_rules(self, filename: str, rules: Dict) -> bool:
-        """Обновляет правила разбиения для конкретного файла"""
-        current_rules = self._load_split_rules()
-        if rules:
-            current_rules[filename] = rules
-        else:
-            current_rules.pop(filename, None)
-        return self._save_split_rules(current_rules)
-
-    def get_split_rules(self, filename: str) -> Dict:
-        """Возвращает правила разбиения для файла"""
-        rules = self._load_split_rules()
-        return rules.get(filename, {})
-    
-    def migrate_yaml_to_split_rules(self) -> int:
-        """Переносит YAML метаданные из существующих файлов в split_rules.json"""
-        migrated = 0
-        
-        for section in self.sections:
-            doc_file = section.get("document", "")
-            metadata = section.get("metadata", {})
-            
-            if metadata and (metadata.get("split_by") or metadata.get("extract_only") or metadata.get("extract_ranges")):
-                current_rules = self.get_split_rules(doc_file)
-                
-                if not current_rules:
-                    new_rules = {
-                        "title": metadata.get("title", doc_file.replace('.txt', '').replace('.md', '')),
-                        "split_by": metadata.get("split_by", "chapters")
-                    }
-                    
-                    if metadata.get("extract_ranges"):
-                        new_rules["extract_ranges"] = metadata["extract_ranges"]
-                    if metadata.get("extract_only"):
-                        new_rules["extract_only"] = metadata["extract_only"]
-                    
-                    if self.update_split_rules(doc_file, new_rules):
-                        migrated += 1
-                        print(f"✅ Перенесены правила для {doc_file}")
-        
-        if migrated > 0:
-            print(f"\n📊 Перенесено правил: {migrated}")
-        
-        return migrated
-    
-    def save_database(self):
-        """Сохраняем базу на диск"""
-        try:
-            self.db_path.mkdir(exist_ok=True, parents=True)
-            
-            with open(self.sections_db, 'w', encoding='utf-8') as f:
-                json.dump(self.sections, f, ensure_ascii=False, indent=2)
-            
-            with open(self.metadata_db, 'w', encoding='utf-8') as f:
-                json.dump(self.metadata, f, ensure_ascii=False, indent=2)
-            
-            print(f"💾 База данных сохранена в {self.db_path}")
-            return True
-        except Exception as e:
-            print(f"❌ Ошибка сохранения базы данных: {e}")
-            return False
-    
-    def _recalculate_metadata(self, sections: List[Dict]) -> Dict:
-        """Пересчитывает метаданные на основе списка разделов"""
-        if not sections:
-            return self._create_default_metadata()
-        
-        unique_documents = set()
-        
-        for section in sections:
-            doc_path = section.get("document_path", "")
-            doc_name = section.get("document", "")
-            if doc_path or doc_name:
-                doc_key = f"{doc_path}_{doc_name}"
-                unique_documents.add(doc_key)
-        
-        created_at = self.metadata.get("created_at", datetime.now().isoformat())
-        
-        return {
-            "created_at": created_at,
-            "last_updated": datetime.now().isoformat(),
-            "total_sections": len(sections),
-            "total_documents": len(unique_documents),
-            "version": "1.0"
-        }
-    
-    def scan_and_build_database(self):
-        """Сканируем папки и строим базу разделов"""
-        print("🔍 Начинаем сканирование папок...")
-        
-        all_sections = []
-        
-        for folder_name, folder_path in CONFIG["folders"].items():
-            if not folder_path or not Path(folder_path).exists():
-                print(f"⚠ Папка не найдена: {folder_path}")
-                continue
-            
-            folder = Path(folder_path)
-            print(f"\n📁 Сканируем: {folder} ({folder_name})")
-            
-            files = []
-            for ext in SUPPORTED_EXTENSIONS:
-                files.extend(list(folder.rglob(f"*{ext}")))
-            
-            folder_documents = len(files)
-            folder_sections = 0
-            
-            for file_path in files:
-                print(f"  📄 {file_path.name} ({file_path.suffix})...", end="")
-                
-                try:
-                    content = self.file_reader.read_file(file_path)
-                    
-                    if content is None:
-                        print(f" ❌ Не удалось прочитать файл")
-                        continue
-                    
-                    # Извлекаем YAML метаданные из файла
-                    metadata = self._extract_yaml_metadata(content)
-                    
-                    # Получаем название документа из split_rules или из YAML
-                    filename = file_path.name
-                    split_rules = self.get_split_rules(filename)
-                    
-                    if split_rules and split_rules.get("title"):
-                        document_title = split_rules["title"]
-                    elif metadata.get("title"):
-                        document_title = metadata.get("title")
-                    else:
-                        document_title = file_path.stem
-                    
-                    # Удаляем YAML заголовок из контента для обработки
-                    clean_content = self._remove_yaml_header(content)
-                    cleaned_content = self._clean_special_characters(clean_content)
-                    
-                    sections = self._split_document_by_type(
-                        cleaned_content,
-                        file_path, 
-                        folder_name, 
-                        document_title,
-                        metadata,
-                        filename
-                    )
-                    
-                    print(f" → {len(sections)} разделов")
-                    folder_sections += len(sections)
-                    
-                    for i, section in enumerate(sections):
-                        section_content = section.get("content", "")
-                        final_content = self._clean_text_from_comments(section_content)
-                        
-                        all_sections.append({
-                            "id": f"{file_path.stem}_{i}_{uuid.uuid4().hex[:8]}",
-                            "folder": folder_name,
-                            "document": file_path.name,
-                            "document_extension": file_path.suffix,
-                            "document_title": document_title,
-                            "document_path": str(file_path),
-                            "title": section.get("title", document_title),
-                            "content": final_content,
-                            "section_type": section.get("type", "text"),
-                            "word_count": len(final_content.split()),
-                            "metadata": metadata,
-                            "selected": False,
-                            "scan_date": datetime.now().isoformat()
-                        })
-                        
-                except Exception as e:
-                    print(f" ❌ Ошибка: {e}")
-        
-        self.sections = all_sections
-        self.metadata = self._recalculate_metadata(all_sections)
-        
-        success = self.save_database()
-        
-        if success:
-            print(f"\n✅ База создана!")
-            print(f"   Всего документов: {self.metadata['total_documents']}")
-            print(f"   Всего разделов: {self.metadata['total_sections']}")
-            
-        return all_sections
-    
-    def _split_document_by_type(self, content: str, file_path: Path, folder_type: str, 
-                               doc_title: str, metadata: Dict = None, filename: str = None) -> List[Dict]:
-        """Разбиваем документ на разделы в зависимости от типа папки"""
-        
-        if folder_type == "normative":
-            return self._split_normative_document(content, file_path, doc_title, metadata or {}, filename)
-        elif folder_type == "methodology":
-            return self._split_methodology_document(content, file_path, doc_title)
-        elif folder_type == "structured":
-            return self._split_structured_document(content, file_path, doc_title)
-        elif folder_type == "expertise":
-            return self._split_expertise_document(content, file_path, doc_title)
-        else:
-            return [{
-                "title": doc_title,
-                "content": content.strip() if content else "",
-                "type": "full_document"
-            }]
-    
-    def _split_normative_document(self, content: str, file_path: Path, doc_title: str, 
-                                metadata: Dict, filename: str = None) -> List[Dict]:
-        """Разделение нормативных документов с использованием split_rules.json"""
-        sections = []
+    @staticmethod
+    def parse_document(file_path: Path) -> Dict:
+        """Разбирает документ на главы и статьи"""
+        reader = FileReader()
+        content = reader.read_file(file_path)
         
         if not content:
-            return [{
-                "title": doc_title,
-                "content": "",
-                "type": "empty_document"
-            }]
+            return {"full_content": "", "chapters": {}, "articles": {}}
         
-        # Загружаем правила из split_rules.json
-        if filename is None:
-            filename = file_path.name
-        
-        split_rules = self.get_split_rules(filename)
-        
-        # Приоритет: split_rules.json > YAML метаданные
-        if split_rules:
-            doc_title = split_rules.get('title', doc_title)
-            split_by = split_rules.get('split_by', '').lower()
-            extract_ranges = split_rules.get('extract_ranges', [])
-            extract_only = split_rules.get('extract_only', [])
-            
-            print(f"  📋 Использую правила из split_rules.json для {filename}")
-        else:
-            split_by = metadata.get('split_by', '').lower()
-            extract_ranges = metadata.get('extract_ranges', [])
-            extract_only = metadata.get('extract_only', [])
-            
-            if split_by or extract_ranges or extract_only:
-                print(f"  📋 Использую YAML метаданные для {filename}")
-        
-        # Объединяем extract_ranges и extract_only
-        all_extract_items = []
-        if extract_ranges:
-            all_extract_items.extend(extract_ranges)
-        if extract_only:
-            all_extract_items.extend(extract_only)
-        
-        if all_extract_items:
-            all_extract_items = [
-                str(item).strip() if not isinstance(item, str) else item.strip()
-                for item in all_extract_items
-            ]
-        
-        # РЕЖИМ ПО УМОЛЧАНИЮ: РАЗДЕЛЕНИЕ ПО ГЛАВАМ
-        if split_by == 'chapters' or (not split_by and not all_extract_items):
-            return self._split_by_chapters(content, doc_title)
-        
-        # РЕЖИМ РАЗДЕЛЕНИЯ ПО СТАТЬЯМ
-        if split_by == 'articles':
-            return self._split_by_articles_with_filter(content, doc_title, all_extract_items)
-        
-        # Если не определено, возвращаем весь документ
-        return [{
-            "title": doc_title,
-            "content": content.strip(),
-            "type": "full_document"
-        }]
-    
-    def _split_by_chapters(self, content: str, doc_title: str) -> List[Dict]:
-        """Разделяет документ на главы"""
-        sections = []
+        content = NormativeParser.clean_text(content)
         lines = content.split('\n')
-        current_section = []
-        current_title = doc_title
-        current_type = "document"
         
+        chapters = {}
+        articles = {}
+        current_chapter = None
+        current_article = None
+        article_content = []
+        
+        # Паттерны для распознавания
         chapter_pattern = re.compile(
             r'^(ГЛАВА|Глава)\s+'
             r'([IVXLCDM]+|\d+(?:\.\d+)*)'
@@ -712,1376 +148,887 @@ class SimpleSectionDatabase:
             r'(.+)$'
         )
         
-        for line in lines:
-            line_stripped = line.strip()
-            match = chapter_pattern.match(line_stripped)
-            
-            if match:
-                if current_section:
-                    sections.append({
-                        "title": current_title,
-                        "content": "\n".join(current_section).strip(),
-                        "type": current_type
-                    })
-                
-                chapter_word = match.group(1)
-                chapter_number = match.group(2)
-                chapter_name = match.group(3).strip()
-                
-                current_title = f"{chapter_word} {chapter_number}. {chapter_name}"
-                current_type = "chapter"
-                current_section = []
-            else:
-                current_section.append(line)
-        
-        if current_section:
-            sections.append({
-                "title": current_title,
-                "content": "\n".join(current_section).strip(),
-                "type": current_type
-            })
-        
-        if not sections:
-            sections.append({
-                "title": doc_title,
-                "content": content.strip(),
-                "type": "full_document"
-            })
-        
-        chapter_count = sum(1 for s in sections if s["type"] == "chapter")
-        print(f"    → Найдено {chapter_count} глав")
-        
-        return sections
-    
-    def _split_by_articles_with_filter(self, content: str, doc_title: str, extract_items: List[str]) -> List[Dict]:
-        """Разделяет документ на статьи с фильтрацией"""
-        sections = []
-        lines = content.split('\n')
-        
-        # Ключевые слова для пропуска
-        skip_keywords = [
-            'дополнена', 'изменена', 'утратила силу', 
-            'вступает в силу', 'См. текст', 'ГАРАНТ', "КонсультантПлюс:",
-            'Федеральным законом', 'Федеральный закон от',
-            'Информация об изменениях', 'предыдущую редакцию',
-            'Пункт', 'Подпункт', 'Часть', 'Абзац', 'абзац'
-        ]
-        
-        # Собираем все статьи
-        all_articles = []
-        current_article = None
+        article_pattern = re.compile(r'^Статья\s+(\d+[\.\d]*)\s*\.\s*(.*)$')
         
         for line in lines:
             line_stripped = line.strip()
             
-            # Пропускаем строки с ключевыми словами
-            skip = False
-            for keyword in skip_keywords:
-                if keyword.lower() in line_stripped.lower():
-                    skip = True
-                    break
-            if skip:
+            # Проверяем на главу
+            chapter_match = chapter_pattern.match(line_stripped)
+            if chapter_match:
+                if current_article and current_article:
+                    articles[current_article] = "\n".join(article_content).strip()
+                    article_content = []
+                    current_article = None
+                
+                chapter_number = chapter_match.group(2)
+                chapter_name = chapter_match.group(3).strip()
+                current_chapter = f"Глава {chapter_number}. {chapter_name}"
+                chapters[current_chapter] = []
                 continue
             
-            article_match = re.match(r'^Статья\s+(\d+[\.\d]*)\s*\.\s*(.*)$', line_stripped)
-            
+            # Проверяем на статью
+            article_match = article_pattern.match(line_stripped)
             if article_match:
-                if current_article:
-                    all_articles.append(current_article)
+                if current_article and article_content:
+                    articles[current_article] = "\n".join(article_content).strip()
+                    article_content = []
                 
-                article_number = article_match.group(1)
+                article_num = article_match.group(1)
                 article_title = article_match.group(2).strip()
+                current_article = article_num
+                article_content.append(line)
                 
-                # Ещё раз проверяем название на ключевые слова
-                skip_title = False
-                for keyword in skip_keywords:
-                    if keyword.lower() in article_title.lower():
-                        skip_title = True
-                        break
-                
-                if not skip_title:
-                    current_article = {
-                        "number": article_number,
-                        "title": article_title,
-                        "full_content": line + "\n"
-                    }
-                else:
-                    current_article = None
-            elif current_article:
-                current_article["full_content"] += line + "\n"
-        
-        if current_article:
-            all_articles.append(current_article)
-        
-        if not all_articles:
-            return [{
-                "title": doc_title,
-                "content": content.strip(),
-                "type": "full_document"
-            }]
-        
-        # Функция сравнения версий
-        def version_compare(v1: str, v2: str) -> int:
-            parts1 = [int(x) for x in v1.split('.')]
-            parts2 = [int(x) for x in v2.split('.')]
+                if current_chapter:
+                    chapters[current_chapter].append(article_num)
+                continue
             
-            for i in range(max(len(parts1), len(parts2))):
-                p1 = parts1[i] if i < len(parts1) else 0
-                p2 = parts2[i] if i < len(parts2) else 0
-                if p1 != p2:
-                    return -1 if p1 < p2 else 1
-            return 0
+            # Собираем содержимое статьи
+            if current_article:
+                article_content.append(line)
         
-        # Функция проверки вхождения статьи в диапазон
-        def is_article_in_range(article_num: str, range_str: str) -> bool:
-            if '-' not in range_str:
-                return article_num == range_str
-            
-            start, end = range_str.split('-')
-            start = start.strip()
-            end = end.strip()
-            
-            return version_compare(start, article_num) <= 0 and version_compare(article_num, end) <= 0
+        # Добавляем последнюю статью
+        if current_article and article_content:
+            articles[current_article] = "\n".join(article_content).strip()
         
-        # Функция проверки вхождения статьи в список
-        def is_article_selected(article_num: str) -> bool:
-            for item in extract_items:
-                if '-' in item:
-                    if is_article_in_range(article_num, item):
-                        return True
-                else:
-                    if article_num == item:
-                        return True
-            return False
-        
-        # Если нет фильтрации, возвращаем все статьи
-        if not extract_items:
-            for article in all_articles:
-                sections.append({
-                    "title": f"Статья {article['number']}. {article['title']}",
-                    "content": article["full_content"].strip(),
-                    "type": "article"
-                })
-            print(f"    → Найдено {len(all_articles)} статей")
-            return sections
-        
-        # Отбираем нужные статьи
-        for article in all_articles:
-            if is_article_selected(article["number"]):
-                sections.append({
-                    "title": f"Статья {article['number']}. {article['title']}",
-                    "content": article["full_content"].strip(),
-                    "type": "article"
-                })
-        
-        print(f"    → Найдено {len(all_articles)} статей, отобрано {len(sections)}")
-        
-        if not sections:
-            sections.append({
-                "title": doc_title,
-                "content": content.strip(),
-                "type": "full_document"
-            })
-        
-        return sections        
-   
-    def _split_methodology_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Разделение методических документов"""
-        return [{
-            "title": doc_title,
-            "content": content.strip() if content else "",
-            "type": "methodology_document"
-        }]
+        return {
+            "full_content": content,
+            "chapters": chapters,
+            "articles": articles,
+            "filename": file_path.name,
+            "title": file_path.stem
+        }
     
-    def _split_structured_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Разделение структурированных документов"""
-        sections = []
+    @staticmethod
+    def get_articles_in_chapter(parsed_doc: Dict, chapter_name: str) -> List[str]:
+        """Возвращает список статей в главе"""
+        chapters = parsed_doc.get("chapters", {})
+        
+        # Ищем главу по частичному совпадению
+        for ch_name, articles in chapters.items():
+            if chapter_name.lower() in ch_name.lower() or ch_name.lower() in chapter_name.lower():
+                return articles
+        
+        return []
+    
+    @staticmethod
+    def expand_article_range(article_range: str) -> List[str]:
+        """Разворачивает диапазон статей (например, '1-5' -> ['1','2','3','4','5'])"""
+        if '-' not in article_range:
+            return [article_range.strip()]
+        
+        parts = article_range.split('-')
+        if len(parts) != 2:
+            return [article_range.strip()]
+        
+        try:
+            start = int(parts[0].strip())
+            end = int(parts[1].strip())
+            return [str(i) for i in range(start, end + 1)]
+        except ValueError:
+            return [article_range.strip()]
+
+# ==============================================
+# ВАЛИДАЦИЯ НАБОРОВ
+# ==============================================
+
+class SetsValidator:
+    """Валидатор структуры sets.json"""
+    
+    VALID_TYPES = ["normative", "structured", "methodology", "expertise"]
+    
+    @staticmethod
+    def validate(sets_data: List[Dict]) -> Tuple[bool, List[str]]:
+        """
+        Проверяет структуру sets.json
+        Возвращает: (валидно, список_ошибок)
+        """
+        errors = []
+        warnings = []
+        
+        # Проверка 1: должен быть список
+        if not isinstance(sets_data, list):
+            errors.append("sets.json должен содержать массив (список) наборов")
+            return False, errors
+        
+        if len(sets_data) == 0:
+            warnings.append("sets.json пуст. Добавьте хотя бы один набор")
+            return True, warnings  # Не ошибка, но предупреждение
+        
+        # Проверка уникальности id
+        ids = set()
+        
+        # Проверка каждого набора
+        for idx, set_item in enumerate(sets_data):
+            prefix = f"Набор #{idx+1}"
+            
+            # Проверка наличия id
+            if "id" not in set_item:
+                errors.append(f"{prefix}: отсутствует обязательное поле 'id'")
+            else:
+                set_id = set_item["id"]
+                if not isinstance(set_id, str):
+                    errors.append(f"{prefix}: поле 'id' должно быть строкой")
+                elif set_id in ids:
+                    errors.append(f"{prefix}: id '{set_id}' уже используется")
+                else:
+                    ids.add(set_id)
+            
+            # Проверка наличия name
+            if "name" not in set_item:
+                errors.append(f"{prefix}: отсутствует обязательное поле 'name'")
+            elif not isinstance(set_item["name"], str):
+                errors.append(f"{prefix}: поле 'name' должно быть строкой")
+            elif len(set_item["name"].strip()) == 0:
+                errors.append(f"{prefix}: поле 'name' не может быть пустым")
+            
+            # description необязательное, но если есть - должна быть строка
+            if "description" in set_item and not isinstance(set_item["description"], str):
+                errors.append(f"{prefix}: поле 'description' должно быть строкой")
+            
+            # Проверка items (обязательное поле)
+            if "items" not in set_item:
+                errors.append(f"{prefix}: отсутствует обязательное поле 'items'")
+                continue
+            
+            items = set_item["items"]
+            if not isinstance(items, list):
+                errors.append(f"{prefix}: поле 'items' должно быть массивом")
+                continue
+            
+            # Проверка каждого элемента в items
+            for item_idx, item in enumerate(items):
+                item_prefix = f"{prefix} - элемент #{item_idx+1}"
+                
+                # Проверка type
+                if "type" not in item:
+                    errors.append(f"{item_prefix}: отсутствует поле 'type'")
+                else:
+                    item_type = item["type"]
+                    if item_type not in SetsValidator.VALID_TYPES:
+                        errors.append(f"{item_prefix}: недопустимый type '{item_type}'. Допустимые: {', '.join(SetsValidator.VALID_TYPES)}")
+                
+                # Проверка document
+                if "document" not in item:
+                    errors.append(f"{item_prefix}: отсутствует поле 'document'")
+                elif not isinstance(item["document"], str):
+                    errors.append(f"{item_prefix}: поле 'document' должно быть строкой")
+                elif not item["document"]:
+                    errors.append(f"{item_prefix}: поле 'document' не может быть пустым")
+                
+                # Проверка chapters (для normative)
+                item_type = item.get("type", "")
+                if item_type == "normative":
+                    chapters = item.get("chapters", [])
+                    articles = item.get("articles", [])
+                    
+                    # Проверяем, что chapters - это список
+                    if "chapters" in item and not isinstance(chapters, list):
+                        errors.append(f"{item_prefix}: поле 'chapters' должно быть массивом")
+                    
+                    # Проверяем, что articles - это список
+                    if "articles" in item and not isinstance(articles, list):
+                        errors.append(f"{item_prefix}: поле 'articles' должно быть массивом")
+                    
+                    # Проверка формата статей (диапазоны)
+                    if articles:
+                        for article in articles:
+                            if not isinstance(article, str):
+                                errors.append(f"{item_prefix}: статья '{article}' должна быть строкой")
+                            elif '-' in article:
+                                parts = article.split('-')
+                                if len(parts) != 2:
+                                    errors.append(f"{item_prefix}: неверный формат диапазона '{article}'. Используйте 'X-Y'")
+                                else:
+                                    try:
+                                        int(parts[0].strip())
+                                        int(parts[1].strip())
+                                    except ValueError:
+                                        errors.append(f"{item_prefix}: диапазон '{article}' должен содержать числа")
+                            elif article.strip():
+                                try:
+                                    # Проверка, что статья - число
+                                    float(article.strip())
+                                except ValueError:
+                                    warnings.append(f"{item_prefix}: статья '{article}' имеет нестандартный формат")
+                
+                # Проверка sections (для structured)
+                if item_type == "structured":
+                    sections = item.get("sections", [])
+                    
+                    if "sections" in item and not isinstance(sections, list):
+                        errors.append(f"{item_prefix}: поле 'sections' должно быть массивом")
+                    
+                    if sections:
+                        for section in sections:
+                            if not isinstance(section, str):
+                                errors.append(f"{item_prefix}: раздел '{section}' должен быть строкой")
+                            elif not (section.strip().startswith('[') and section.strip().endswith(']')):
+                                warnings.append(f"{item_prefix}: раздел '{section}' рекомендуется оформлять в квадратных скобках")
+                
+                # Проверка, что для методических и экспертных документов нет лишних полей
+                if item_type in ["methodology", "expertise"]:
+                    if "chapters" in item:
+                        warnings.append(f"{item_prefix}: для type '{item_type}' поле 'chapters' игнорируется")
+                    if "articles" in item:
+                        warnings.append(f"{item_prefix}: для type '{item_type}' поле 'articles' игнорируется")
+                    if "sections" in item:
+                        warnings.append(f"{item_prefix}: для type '{item_type}' поле 'sections' игнорируется")
+        
+        return len(errors) == 0, errors + warnings
+
+# ==============================================
+# РАБОТА С НАБОРАМИ
+# ==============================================
+
+class SetsManager:
+    """Управление наборами документов"""
+    
+    def __init__(self):
+        self.sets_file = Path(CONFIG["sets_file"])
+        self.reader = FileReader()
+        self.parser = NormativeParser()
+        self._loaded_docs = {}  # Кеш для загруженных документов
+        self.validation_errors = []
+        self.validation_warnings = []
+    
+    def load_sets(self) -> List[Dict]:
+        """Загружает и валидирует наборы из JSON файла"""
+        if not self.sets_file.exists():
+            # Создаем пример файла наборов
+            example_sets = [
+                {
+                    "id": "example_1",
+                    "name": "Пример набора",
+                    "description": "Пример набора для тестирования",
+                    "selected": True,
+                    "items": [
+                        {
+                            "type": "normative",
+                            "document": "Земельный кодекс РФ.txt",
+                            "chapters": ["Глава 1"],
+                            "articles": ["1", "2", "5-10"]
+                        },
+                        {
+                            "type": "structured",
+                            "document": "Порядок действий.md",
+                            "sections": ["[Раздел 1]", "[Раздел 2]"]
+                        },
+                        {
+                            "type": "methodology",
+                            "document": "Методика расчета.md"
+                        },
+                        {
+                            "type": "expertise",
+                            "document": "Заключение эксперта.md"
+                        }
+                    ]
+                }
+            ]
+            self._save_sets(example_sets)
+            self.validation_errors = []
+            self.validation_warnings = []
+            return example_sets
+        
+        try:
+            with open(self.sets_file, 'r', encoding='utf-8') as f:
+                sets = json.load(f)
+                
+                # Валидация структуры
+                is_valid, messages = SetsValidator.validate(sets)
+                
+                # Разделяем ошибки и предупреждения
+                self.validation_errors = [m for m in messages if "неверный" in m.lower() or "отсутствует" in m.lower() or "должен" in m.lower()]
+                self.validation_warnings = [m for m in messages if m not in self.validation_errors]
+                
+                if not is_valid:
+                    return []  # Возвращаем пустой список при критических ошибках
+                
+                if isinstance(sets, list):
+                    return sets
+                return []
+                
+        except json.JSONDecodeError as e:
+            st.error(f"❌ Ошибка синтаксиса JSON: {e}")
+            self.validation_errors = [f"Ошибка синтаксиса JSON: {e}"]
+            return []
+        except Exception as e:
+            st.error(f"❌ Ошибка загрузки наборов: {e}")
+            self.validation_errors = [f"Ошибка загрузки: {e}"]
+            return []
+    
+    def get_validation_status(self) -> Tuple[bool, List[str], List[str]]:
+        """Возвращает статус валидации: (есть_ли_ошибки, ошибки, предупреждения)"""
+        has_errors = len(self.validation_errors) > 0
+        return has_errors, self.validation_errors, self.validation_warnings
+    
+    def _save_sets(self, sets: List[Dict]) -> bool:
+        """Сохраняет наборы в JSON файл"""
+        try:
+            with open(self.sets_file, 'w', encoding='utf-8') as f:
+                json.dump(sets, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            st.error(f"Ошибка сохранения наборов: {e}")
+            return False
+    
+    def save_sets(self, sets: List[Dict]) -> bool:
+        """Сохраняет наборы (публичный метод)"""
+        # Перед сохранением проверяем валидность
+        is_valid, errors, _ = SetsValidator.validate(sets)
+        if not is_valid:
+            for error in errors:
+                st.error(f"❌ {error}")
+            return False
+        return self._save_sets(sets)
+    
+    def get_document_content(self, doc_type: str, filename: str) -> Optional[Dict]:
+        """Получает содержимое документа по типу и имени"""
+        cache_key = f"{doc_type}/{filename}"
+        
+        if cache_key in self._loaded_docs:
+            return self._loaded_docs[cache_key]
+        
+        folder = CONFIG["folders"].get(doc_type)
+        if not folder:
+            return None
+        
+        file_path = Path(folder) / filename
+        
+        if not file_path.exists():
+            return None
+        
+        if doc_type == "normative":
+            result = self.parser.parse_document(file_path)
+        else:
+            content = self.reader.read_file(file_path)
+            if content:
+                content = self.parser.clean_text(content)
+            result = {
+                "full_content": content or "",
+                "filename": filename,
+                "title": file_path.stem
+            }
+        
+        self._loaded_docs[cache_key] = result
+        return result
+    
+    def extract_from_normative(self, doc_data: Dict, item: Dict) -> Tuple[str, List[str]]:
+        """Извлекает содержимое из нормативного документа"""
+        filename = item.get("document", "")
+        parsed_doc = doc_data
+        
+        if not parsed_doc or not parsed_doc.get("full_content"):
+            return f"\n## ⚠️ {filename}\n\n**Ошибка:** Документ не найден или пуст\n", ["Файл не найден"]
+        
+        result_parts = []
+        warnings = []
+        
+        chapters = item.get("chapters", [])
+        articles = item.get("articles", [])
+        
+        # Режим: весь документ целиком
+        if not chapters and not articles:
+            result_parts.append(f"\n## 📖 {filename} (полный документ)\n")
+            result_parts.append(parsed_doc["full_content"])
+            return "\n".join(result_parts), warnings
+        
+        # Добавляем заголовок
+        result_parts.append(f"\n## 📖 {filename}\n")
+        
+        # Обрабатываем главы (все статьи из глав)
+        for chapter in chapters:
+            chapter_articles = self.parser.get_articles_in_chapter(parsed_doc, chapter)
+            if chapter_articles:
+                result_parts.append(f"\n### {chapter}\n")
+                for art_num in chapter_articles:
+                    art_content = parsed_doc["articles"].get(art_num, "")
+                    if art_content:
+                        result_parts.append(art_content)
+                        result_parts.append("")
+                    else:
+                        warnings.append(f"Статья {art_num} из главы '{chapter}' не найдена в {filename}")
+            else:
+                warnings.append(f"Глава '{chapter}' не найдена в {filename}")
+        
+        # Обрабатываем отдельные статьи
+        for article in articles:
+            # Разворачиваем диапазоны
+            article_numbers = self.parser.expand_article_range(article)
+            
+            for art_num in article_numbers:
+                art_content = parsed_doc["articles"].get(art_num, "")
+                if art_content:
+                    result_parts.append(f"\n### Статья {art_num}\n")
+                    result_parts.append(art_content)
+                    result_parts.append("")
+                else:
+                    warnings.append(f"Статья {art_num} не найдена в {filename}")
+        
+        return "\n".join(result_parts), warnings
+    
+    def extract_from_structured(self, doc_data: Dict, item: Dict) -> Tuple[str, List[str]]:
+        """Извлекает содержимое из структурированного документа"""
+        filename = item.get("document", "")
+        sections = item.get("sections", [])
+        content = doc_data.get("full_content", "")
         
         if not content:
-            return [{
-                "title": doc_title,
-                "content": "",
-                "type": "empty_document"
-            }]
+            return f"\n## ⚠️ {filename}\n\n**Ошибка:** Документ не найден или пуст\n", ["Файл не найден"]
         
+        result_parts = []
+        warnings = []
+        
+        result_parts.append(f"\n## 📑 {filename}\n")
+        
+        # Если разделы не указаны - выводим весь документ
+        if not sections:
+            result_parts.append(content)
+            return "\n".join(result_parts), warnings
+        
+        # Ищем указанные разделы (в квадратных скобках)
         lines = content.split('\n')
-        current_section = []
-        current_title = doc_title
-        current_type = "document"
-        
-        bracket_pattern = r'^\[([^\[\]]+)\]$'
+        current_section = None
+        section_content = []
+        found_sections = set()
         
         for line in lines:
             line_stripped = line.strip()
-            is_header = False
             
-            match = re.match(bracket_pattern, line_stripped)
-            if match:
-                header_content = match.group(1).strip()
-                
-                if (len(header_content) > 3 and 
-                    len(header_content) <= 200 and
-                    re.search(r'[А-Яа-яЁёA-Za-z]', header_content)):
+            # Проверяем, является ли строка заголовком раздела
+            is_section_header = False
+            if line_stripped.startswith('[') and line_stripped.endswith(']'):
+                header_content = line_stripped[1:-1].strip()
+                if header_content and len(header_content) <= 200:
+                    # Сохраняем предыдущий раздел
+                    if current_section and section_content:
+                        if current_section in sections:
+                            result_parts.append(f"\n### {current_section}\n")
+                            result_parts.append("\n".join(section_content).strip())
+                            result_parts.append("")
+                            found_sections.add(current_section)
                     
-                    if current_section:
-                        sections.append({
-                            "title": current_title,
-                            "content": "\n".join(current_section).strip(),
-                            "type": current_type
-                        })
-                    
-                    current_title = header_content
-                    current_type = "bracketed_section"
-                    current_section = []
-                    is_header = True
+                    current_section = line_stripped
+                    section_content = []
+                    is_section_header = True
             
-            if not is_header:
-                current_section.append(line)
+            if not is_section_header and current_section:
+                section_content.append(line)
         
-        if current_section:
-            sections.append({
-                "title": current_title,
-                "content": "\n".join(current_section).strip(),
-                "type": current_type
-            })
+        # Добавляем последний раздел
+        if current_section and section_content:
+            if current_section in sections:
+                result_parts.append(f"\n### {current_section}\n")
+                result_parts.append("\n".join(section_content).strip())
+                result_parts.append("")
+                found_sections.add(current_section)
         
-        if not sections:
-            sections.append({
-                "title": doc_title,
-                "content": content.strip(),
-                "type": "full_document"
-            })
+        # Проверяем, какие разделы не найдены
+        for section in sections:
+            if section not in found_sections:
+                warnings.append(f"Раздел '{section}' не найден в {filename}")
         
-        return sections
+        if not result_parts:
+            warnings.append(f"Ни один из указанных разделов не найден в {filename}")
+            result_parts.append(f"\n⚠️ В документе {filename} не найдены указанные разделы\n")
+        
+        return "\n".join(result_parts), warnings
     
-    def _split_expertise_document(self, content: str, file_path: Path, doc_title: str) -> List[Dict]:
-        """Экспертные документы сохраняем полностью"""
+    def extract_from_simple(self, doc_type: str, doc_data: Dict, item: Dict) -> Tuple[str, List[str]]:
+        """Извлекает содержимое из простых документов (methodology, expertise)"""
+        filename = item.get("document", "")
+        content = doc_data.get("full_content", "")
+        
         if not content:
-            return [{
-                "title": doc_title,
-                "content": "",
-                "type": "empty_document"
-            }]
+            return f"\n## ⚠️ {filename}\n\n**Ошибка:** Документ не найден или пуст\n", ["Файл не найден"]
         
-        return [{
-            "title": doc_title,
-            "content": content.strip(),
-            "type": "expertise_document"
-        }]
+        icon = "📚" if doc_type == "methodology" else "👨‍⚖️"
+        title = "Методический документ" if doc_type == "methodology" else "Экспертное заключение"
+        
+        result_parts = [
+            f"\n## {icon} {filename} ({title})\n",
+            content
+        ]
+        
+        return "\n".join(result_parts), []
     
-    def get_sections_for_display(self) -> List[Dict]:
-        """Возвращает разделы для отображения"""
-        display_data = []
+    def generate_output(self, selected_set_ids: List[str]) -> Tuple[Optional[str], List[str]]:
+        """Генерирует выходной JSON для выбранных наборов"""
+        all_sets = self.load_sets()
+        selected_sets = [s for s in all_sets if s.get("id") in selected_set_ids]
         
-        for section in self.sections:
-            section_id = section.get("id", str(uuid.uuid4()))
-            folder = section.get("folder", "unknown")
-            doc_file = section.get("document", "")
-            doc_ext = section.get("document_extension", ".txt")
-            doc_title = section.get("document_title", doc_file)
-            section_title = section.get("title", doc_title)
-            content = section.get("content", "")
-            word_count = section.get("word_count", 0)
-            selected = section.get("selected", False)
-            scan_date = section.get("scan_date", "")
-            
-            short_doc_title = doc_title[:90] + "..." if len(doc_title) > 90 else doc_title
-            short_section_title = section_title[:90] + "..." if len(section_title) > 90 else section_title
-            
-            if folder == "structured" and not section_title.startswith("["):
-                short_section_title = f"[{short_section_title}]"
-                section_title = f"[{section_title}]"
-            
-            format_icon = {
-                ".md": "📝",
-                ".txt": "📄"
-            }.get(doc_ext.lower(), "📎")
-            
-            display_data.append({
-                "id": section_id,
-                "folder": folder,
-                "document": f"{format_icon} {short_doc_title}",
-                "document_full": doc_title,
-                "file": doc_file,
-                "extension": doc_ext,
-                "section": short_section_title,
-                "section_full": section_title,
-                "type": section.get("section_type", "text"),
-                "words": word_count,
-                "selected": selected,
-                "content_full": content,
-                "scan_date": scan_date
-            })
+        if not selected_sets:
+            return None, ["Не выбрано ни одного набора"]
         
-        return display_data
-    
-    def update_selections(self, selected_ids: List[str]):
-        """Обновляет выбор эксперта и сразу сохраняет в базу"""
-        updated_count = 0
+        output_data = []
+        all_warnings = []
         
-        for section in self.sections:
-            section_id = section.get("id", "")
-            old_selected = section.get("selected", False)
-            new_selected = section_id in selected_ids
+        for set_data in selected_sets:
+            set_output = {
+                "set_id": set_data.get("id"),
+                "set_name": set_data.get("name"),
+                "set_description": set_data.get("description", ""),
+                "export_date": datetime.now().isoformat(),
+                "items": []
+            }
             
-            if old_selected != new_selected:
-                section["selected"] = new_selected
-                updated_count += 1
-        
-        if updated_count > 0:
-            if self.save_database():
-                print(f"💾 Обновлено {updated_count} выборов")
-            else:
-                print(f"❌ Ошибка сохранения выборов")
-        
-        return updated_count
-    
-    def update_section_selection(self, section_id: str, selected: bool) -> bool:
-        """Обновляет выбор конкретного раздела"""
-        for section in self.sections:
-            if section.get("id") == section_id:
-                section["selected"] = selected
-                return True
-        return False
-    
-    def get_selected_sections(self) -> List[Dict]:
-        """Возвращает выбранные экспертом разделы"""
-        return [s for s in self.sections if s.get("selected", False)]
-    
-    def clear_selections(self):
-        """Очищает все выборы"""
-        cleared_count = 0
-        for section in self.sections:
-            if section.get("selected", False):
-                section["selected"] = False
-                cleared_count += 1
-        
-        if cleared_count > 0:
-            if self.save_database():
-                print(f"🗑️ Очищено {cleared_count} выборов")
-            else:
-                print(f"❌ Ошибка очистки выборов")
-        
-        return cleared_count
-    
-    def export_selected_to_json(self, output_path: Path) -> bool:
-        """Экспортирует выбранные разделы в JSON файл"""
-        try:
-            selected_sections = self.get_selected_sections()
-            
-            if not selected_sections:
-                print("⚠ Нет выбранных разделов для экспорта")
-                return False
-            
-            export_data = []
-            
-            for section in selected_sections:
-                doc_title = section.get("document_title", "")
-                section_title = section.get("title", "")
-                content = section.get("content", "")
+            for item in set_data.get("items", []):
+                doc_type = item.get("type")
+                filename = item.get("document", "")
                 
-                if section.get("folder") == "structured" and not section_title.startswith("["):
-                    section_title = f"[{section_title}]"
+                if not filename:
+                    continue
                 
-                export_data.append({
-                    "title": doc_title,
-                    "section_title": section_title,
-                    "content": content
+                # Получаем документ
+                doc_data = self.get_document_content(doc_type, filename)
+                
+                if not doc_data:
+                    all_warnings.append(f"Документ не найден: {doc_type}/{filename}")
+                    set_output["items"].append({
+                        "document": filename,
+                        "type": doc_type,
+                        "error": "Документ не найден",
+                        "content": ""
+                    })
+                    continue
+                
+                # Извлекаем содержимое в зависимости от типа
+                if doc_type == "normative":
+                    content, warnings = self.extract_from_normative(doc_data, item)
+                elif doc_type == "structured":
+                    content, warnings = self.extract_from_structured(doc_data, item)
+                elif doc_type in ["methodology", "expertise"]:
+                    content, warnings = self.extract_from_simple(doc_type, doc_data, item)
+                else:
+                    all_warnings.append(f"Неизвестный тип документа: {doc_type}")
+                    continue
+                
+                all_warnings.extend(warnings)
+                
+                set_output["items"].append({
+                    "document": filename,
+                    "type": doc_type,
+                    "content": content,
+                    "warnings": warnings
                 })
             
-            output_path.parent.mkdir(exist_ok=True, parents=True)
-            
+            output_data.append(set_output)
+        
+        # Сохраняем в JSON файл
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = Path(CONFIG["data_path"]) / f"export_{timestamp}.json"
+        
+        try:
             with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, ensure_ascii=False, indent=2)
+                json.dump(output_data, f, ensure_ascii=False, indent=2)
             
-            print(f"✅ Экспортировано {len(selected_sections)} разделов в {output_path}")
-            return True
-            
+            return str(output_path), all_warnings
         except Exception as e:
-            print(f"❌ Ошибка экспорта в JSON: {e}")
-            return False
-    
-    def get_database_stats(self) -> Dict:
-        """Возвращает базовую статистику базы данных"""
-        return {
-            "total_sections": len(self.sections),
-            "selected_sections": sum(1 for s in self.sections if s.get("selected", False)),
-            "total_documents": self.metadata.get("total_documents", 0)
-        }
-    
-    def get_all_documents(self) -> List[str]:
-        """Возвращает список всех документов в базе"""
-        docs = set()
-        for section in self.sections:
-            doc = section.get("document", "")
-            if doc:
-                docs.add(doc)
-        return sorted(list(docs))
+            return None, [f"Ошибка сохранения файла: {e}"]
 
 # ==============================================
-# СИСТЕМА УПРАВЛЕНИЯ СЕССИЯМИ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ИНТЕРФЕЙСА
 # ==============================================
 
-class SessionManager:
-    """Упрощенное управление рабочими сессиями экспертов"""
+def format_items_summary(items: List[Dict]) -> str:
+    """Форматирует краткое описание элементов набора"""
+    summaries = []
     
-    def __init__(self, sessions_path: str = None):
-        self.sessions_path = Path(sessions_path or CONFIG["sessions_path"])
-        self.sessions_path.mkdir(exist_ok=True, parents=True)
-    
-    def create_session(self, session_name: str = None, template_prompt: str = None) -> Optional[Path]:
-        """Создает новую рабочую сессию"""
-        try:
-            if not session_name:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                session_name = f"session_{timestamp}"
+    for item in items:
+        doc_type = item.get("type", "")
+        filename = item.get("document", "")
+        
+        # Сокращаем имя файла
+        short_name = filename[:40] + "..." if len(filename) > 40 else filename
+        
+        if doc_type == "normative":
+            chapters = item.get("chapters", [])
+            articles = item.get("articles", [])
             
-            session_path = self.sessions_path / session_name
-            session_path.mkdir(exist_ok=True, parents=True)
+            parts = []
+            if chapters:
+                parts.append(f"{len(chapters)} гл.")
+            if articles:
+                # Показываем первые 3 статьи
+                arts_preview = articles[:3]
+                arts_str = ", ".join(arts_preview)
+                if len(articles) > 3:
+                    arts_str += f" +{len(articles)-3}"
+                parts.append(f"ст. {arts_str}")
             
-            attachments_dir = session_path / "attachments"
-            attachments_dir.mkdir(exist_ok=True)
-            
-            templates_data = load_templates()
-            selected_template = get_selected_template(templates_data)
-            
-            prompt_file = session_path / "prompt.md"
-            
-            if template_prompt:
-                prompt_content = template_prompt
+            if not parts:
+                summary = f"📖 {short_name} (полностью)"
             else:
-                prompt_content = selected_template.get("prompt", "") if selected_template else ""
-            
-            with open(prompt_file, 'w', encoding='utf-8') as f:
-                f.write(prompt_content)
-            
-            print(f"✅ Создана сессия: {session_path}")
-            return session_path
-            
-        except Exception as e:
-            print(f"❌ Ошибка создания сессии: {e}")
-            return None
-    
-    def get_session_info(self, session_path: Path) -> Dict:
-        """Получает базовую информацию о сессии"""
-        return {
-            "session_name": session_path.name,
-            "session_path": str(session_path),
-            "created": datetime.fromtimestamp(session_path.stat().st_ctime).isoformat(),
-            "has_prompt": (session_path / "prompt.md").exists(),
-            "has_materials": (session_path / "materials.json").exists(),
-            "has_attachments": (session_path / "attachments").exists()
-        }
-    
-    def list_sessions(self) -> List[Dict]:
-        """Возвращает список всех сессий"""
-        sessions = []
+                summary = f"📖 {short_name} — {' • '.join(parts)}"
         
-        for session_dir in self.sessions_path.glob("session_*"):
-            if session_dir.is_dir():
-                session_info = self.get_session_info(session_dir)
-                sessions.append(session_info)
-        
-        sessions.sort(key=lambda x: x["created"], reverse=True)
-        
-        return sessions
-    
-    def delete_session(self, session_path: Path) -> bool:
-        """Удаляет сессию"""
-        try:
-            if session_path.exists() and session_path.is_dir():
-                shutil.rmtree(session_path)
-                print(f"🗑️ Удалена сессия: {session_path}")
-                return True
+        elif doc_type == "structured":
+            sections = item.get("sections", [])
+            if sections:
+                secs_preview = [s[:30] + "..." if len(s) > 30 else s for s in sections[:2]]
+                secs_str = ", ".join(secs_preview)
+                if len(sections) > 2:
+                    secs_str += f" +{len(sections)-2}"
+                summary = f"📑 {short_name} — [{secs_str}]"
             else:
-                print(f"⚠ Сессия не найдена: {session_path}")
-                return False
-        except Exception as e:
-            print(f"❌ Ошибка удаления сессии: {e}")
-            return False
-    
-    def export_to_session(self, session_path: Path, database: SimpleSectionDatabase) -> bool:
-        """Экспортирует выбранные разделы в сессию"""
-        try:
-            materials_file = session_path / "materials.json"
-            return database.export_selected_to_json(materials_file)
-            
-        except Exception as e:
-            print(f"❌ Ошибка экспорта в сессию: {e}")
-            return False
+                summary = f"📑 {short_name} (полностью)"
         
-    def replace_prompt_from_template(self, session_path: Path, template_id: str) -> bool:
-        """Заменяет prompt.md в сессии на промт из выбранного шаблона"""
-        try:
-            templates_data = load_templates()
-            
-            selected_template = None
-            for template in templates_data:
-                if template["id"] == template_id:
-                    selected_template = template
-                    break
-            
-            if not selected_template:
-                print(f"❌ Шаблон с ID '{template_id}' не найден")
-                return False
-            
-            if not session_path.exists() or not session_path.is_dir():
-                print(f"❌ Сессия не найдена: {session_path}")
-                return False
-            
-            prompt_file = session_path / "prompt.md"
-            prompt_content = selected_template.get("prompt", "")
-            
-            with open(prompt_file, 'w', encoding='utf-8') as f:
-                f.write(prompt_content)
-            
-            print(f"✅ Промт в сессии {session_path.name} заменен на шаблон '{selected_template['name']}'")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Ошибка замены промта: {e}")
-            return False
-
-# ==============================================
-# ЗАГРУЗКА КОНФИГУРАЦИИ
-# ==============================================
-
-CONFIG = load_config()
-DEFAULT_PROMPT = load_default_prompt()
-SUPPORTED_EXTENSIONS = CONFIG.get("supported_extensions", [".md", ".txt"])
-
-if not Path(CONFIG["folders"]["normative"]).exists():
-    created = create_default_folders(CONFIG["folders"])
-    if created:
-        print(f"📁 Созданы папки по умолчанию:")
-        for folder_type, path in created:
-            print(f"   - {folder_type}: {path}")
-
-folder_status = validate_folders(CONFIG["folders"])
-if not folder_status["all_exist"]:
-    print("⚠ Предупреждение: некоторые папки недоступны:")
-    for folder_type, path in folder_status["missing"]:
-        print(f"   - {folder_type}: {path}")
+        elif doc_type == "methodology":
+            summary = f"📚 {short_name}"
+        
+        elif doc_type == "expertise":
+            summary = f"👨‍⚖️ {short_name}"
+        
+        else:
+            summary = f"📄 {short_name}"
+        
+        summaries.append(summary)
+    
+    return "\n".join(summaries)
 
 # ==============================================
 # ВЕБ-ИНТЕРФЕЙС
 # ==============================================
 
-st.markdown("""
-<style>
-.section-item {
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
-    margin-bottom: 4px;
-    background-color: white;
-    transition: all 0.2s;
-}
-.section-item:hover {
-    border-color: #4CAF50;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-}
-.section-header {
-    font-weight: 600;
-    font-size: 0.9rem;
-    margin-bottom: 2px;
-}
-.section-meta {
-    font-size: 0.75rem;
-    margin-bottom: 2px;
-}
-.section-title {
-    font-weight: 500;
-    font-size: 0.85rem;
-    margin-top: 2px;
-    margin-bottom: 0;
-}
-.selected-section {
-    border-color: #4CAF50;
-    background-color: #f8fff8;
-}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="Экспертная система", layout="wide")
 
-@st.cache_resource
-def init_database():
-    db = SimpleSectionDatabase()
-    # Автоматическая миграция YAML при первом запуске
-    # migrated = db.migrate_yaml_to_split_rules()
-    # if migrated > 0:
-    #     st.success(f"✅ Автоматически перенесено {migrated} правил из YAML в split_rules.json")
-    return db
+st.title("📋 Экспертная система по нормативным документам")
 
-@st.cache_resource
-def init_session_manager():
-    return SessionManager()
+# Инициализация менеджера
+if 'sets_manager' not in st.session_state:
+    st.session_state.sets_manager = SetsManager()
+    st.session_state.sets = st.session_state.sets_manager.load_sets()
+    st.session_state.selected_ids = []  # Храним выбранные ID
 
-if 'db' not in st.session_state:
-    st.session_state.db = init_database()
-    st.session_state.session_manager = init_session_manager()
-    st.session_state.current_session = None
-    st.session_state.has_unsaved_changes = False
+sets_manager = st.session_state.sets_manager
 
-db = st.session_state.db
-session_manager = st.session_state.session_manager
+# Отображение ошибок валидации
+has_errors, errors, warnings = sets_manager.get_validation_status()
+if has_errors:
+    with st.sidebar:
+        st.error("❌ Ошибки в структуре sets.json")
+        for error in errors:
+            st.error(f"• {error}")
+        st.info("Исправьте ошибки в файле sets.json и перезагрузите страницу")
 
-# ==============================================
-# ФУНКЦИИ СИНХРОНИЗАЦИИ ВЫБРАННЫХ РАЗДЕЛОВ
-# ==============================================
+if warnings:
+    with st.sidebar:
+        st.warning("⚠️ Предупреждения в структуре sets.json")
+        for warning in warnings:
+            st.warning(f"• {warning}")
 
-def sync_selected_sections():
-    """Синхронизирует st.session_state.selected_sections с базой данных"""
-    selected_from_db = db.get_selected_sections()
-    db_selected_ids = {section["id"] for section in selected_from_db}
+# Основной интерфейс
+st.subheader("📌 Выбор наборов документов")
+
+if not st.session_state.sets:
+    st.info("Нет доступных наборов. Создайте файл sets.json в корне программы.")
     
-    if 'selected_sections' not in st.session_state:
-        st.session_state.selected_sections = set()
+    # Показываем пример структуры
+    with st.expander("📖 Пример структуры sets.json"):
+        st.code("""
+[
+    {
+        "id": "example_1",
+        "name": "Проверка земельного участка",
+        "description": "Набор для проверки земельного участка",
+        "selected": true,
+        "items": [
+            {
+                "type": "normative",
+                "document": "Земельный кодекс РФ.txt",
+                "chapters": ["Глава 1"],
+                "articles": ["1", "2", "5-10"]
+            },
+            {
+                "type": "structured",
+                "document": "Порядок действий.md",
+                "sections": ["[Раздел 1]", "[Раздел 2]"]
+            },
+            {
+                "type": "methodology",
+                "document": "Методика расчета.md"
+            },
+            {
+                "type": "expertise",
+                "document": "Заключение эксперта.md"
+            }
+        ]
+    }
+]
+        """, language="json")
     
-    for section_id in db_selected_ids:
-        if section_id not in st.session_state.selected_sections:
-            st.session_state.selected_sections.add(section_id)
-    
-    session_ids_to_remove = []
-    for section_id in st.session_state.selected_sections:
-        if section_id not in db_selected_ids:
-            session_ids_to_remove.append(section_id)
-    
-    for section_id in session_ids_to_remove:
-        st.session_state.selected_sections.discard(section_id)
-    
-    return len(st.session_state.selected_sections)
-
-def update_selected_sections():
-    """Обновляет выбранные разделы из базы данных"""
-    selected_sections = db.get_selected_sections()
-    st.session_state.selected_sections = {section["id"] for section in selected_sections}
-
-if 'selected_sections' not in st.session_state:
-    update_selected_sections()
+    # Кнопка создания примера
+    if st.button("📄 Создать пример sets.json"):
+        example_sets = [
+            {
+                "id": "example_1",
+                "name": "Пример набора",
+                "description": "Пример набора для тестирования",
+                "selected": True,
+                "items": []
+            }
+        ]
+        sets_manager.save_sets(example_sets)
+        st.rerun()
 else:
-    sync_selected_sections()
-
-# ==============================================
-# ОСНОВНОЙ ИНТЕРФЕЙС
-# ==============================================
-
-tab1, tab2, tab3 = st.tabs([
-    "📋 Выбор разделов",
-    "📁 Рабочие сессии", 
-    "⚙️ Настройки"
-])
-
-with tab1:
-    st.subheader("📋 ВЫБОР РАЗДЕЛОВ ДЛЯ ЭКСПЕРТНОГО ОТВЕТА")
+    # Отображение наборов с чекбоксами (без слова "Выбрать")
+    selected_ids = []
     
-    display_data = db.get_sections_for_display()
-    
-    if not display_data:
-        st.info("База пуста. Нажмите 'Сканировать папки' в боковой панели.")
-    else:
-        doc_options = list(set(item["document_full"] for item in display_data))
-        doc_options.sort()
-        doc_filter = st.multiselect(
-            "Фильтр по документу:",
-            options=doc_options,
-            format_func=lambda x: x[:80] + "..." if len(x) > 80 else x,
-            help="Выберите конкретный документ",
-            key="doc_filter_tab1"
-        )
-        
-        filtered_data = display_data.copy()
-        
-        if doc_filter:
-            filtered_data = [item for item in filtered_data if item["document_full"] in doc_filter]
-        
+    for i, set_data in enumerate(st.session_state.sets):
         with st.container():
-            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+            col1, col2 = st.columns([0.3, 9.7])
             
-            with col_stat1:
-                st.metric("Найдено", len(filtered_data), delta=f"из {len(display_data)}")
+            with col1:
+                is_selected = st.checkbox(
+                    " ",  # Пустая метка вместо "Выбрать"
+                    value=set_data.get("selected", False),
+                    key=f"set_{set_data.get('id', i)}"
+                )
+                if is_selected:
+                    selected_ids.append(set_data.get("id"))
             
-            with col_stat2:
-                selected_count = sum(1 for item in filtered_data if item["id"] in st.session_state.selected_sections)
-                total_selected = len(st.session_state.selected_sections)
-                st.metric("Выбрано", selected_count)
-            
-            with col_stat3:
-                if st.button("✅ Выбрать все", use_container_width=True, key="select_all_tab1"):
-                    section_ids = [item["id"] for item in filtered_data]
-                    for section_id in section_ids:
-                        if section_id not in st.session_state.selected_sections:
-                            st.session_state.selected_sections.add(section_id)
-                            db.update_section_selection(section_id, True)
-                    
-                    db.save_database()
-                    sync_selected_sections()
-                    st.session_state.has_unsaved_changes = False
-                    st.success(f"Выбрано {len(section_ids)} разделов")
-                    st.rerun()
-            
-            with col_stat4:
-                if st.button("❌ Снять все", use_container_width=True, key="deselect_all_tab1"):
-                    section_ids = [item["id"] for item in filtered_data]
-                    for section_id in section_ids:
-                        if section_id in st.session_state.selected_sections:
-                            st.session_state.selected_sections.remove(section_id)
-                            db.update_section_selection(section_id, False)
-                    
-                    db.save_database()
-                    sync_selected_sections()
-                    st.session_state.has_unsaved_changes = False
-                    st.info(f"Снято {len(section_ids)} разделов")
-                    st.rerun()
-        
-        if filtered_data:
-            changes_made = False
-            
-            with st.container():
-                for idx, item in enumerate(filtered_data):
-                    css_class = "section-item"
-                    if item["id"] in st.session_state.selected_sections:
-                        css_class += " selected-section"
-                    
-                    col_check, col_content = st.columns([0.4, 11.6])
-                    
-                    with col_check:
-                        current_selected = item["id"] in st.session_state.selected_sections
-                        new_selected = st.checkbox(
-                            "Выбрать",
-                            value=current_selected,
-                            key=f"select_{item['id']}_{idx}",
-                            label_visibility="collapsed"
-                        )
-                        
-                        if new_selected != current_selected:
-                            if new_selected:
-                                st.session_state.selected_sections.add(item["id"])
-                            else:
-                                st.session_state.selected_sections.discard(item["id"])
-                            
-                            db.update_section_selection(item["id"], new_selected)
-                            changes_made = True
-                            st.session_state.has_unsaved_changes = True
-                    
-                    with col_content:
-                        st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
-                        
-                        folder_icon = {
-                            "normative": "📖",
-                            "methodology": "📚",
-                            "structured": "🗂️",
-                            "expertise": "👨‍⚖️"
-                        }.get(item["folder"], "📄")
-                        
-                        st.markdown(
-                            f'<div class="section-header">'
-                            f'<span style="font-weight: 600; color: inherit;">{folder_icon} {item["document"]}</span>'
-                            f'</div>', 
-                            unsafe_allow_html=True
-                        )
-                        
-                        meta_info = []
-                        meta_info.append(f"Формат: {item.get('extension', '.txt')}")
-                        meta_info.append(f"Слов: {item['words']}")
-                        if item["id"] in st.session_state.selected_sections:
-                            meta_info.append("✅ Выбрано")
-                        
-                        st.markdown(f'<div class="section-meta">{" • ".join(meta_info)}</div>', 
-                                unsafe_allow_html=True)
-                        
-                        st.markdown(
-                            f'<div class="section-title">'
-                            f'<span style="font-weight: 500; color: inherit;">{item["section"]}</span>'
-                            f'</div>', 
-                            unsafe_allow_html=True
-                        )
-                        
-                        st.markdown('</div>', unsafe_allow_html=True)
-            
-            if changes_made:
-                st.session_state.has_unsaved_changes = True
-            
-            st.markdown("---")
-            
-            with st.container():
-                col_manage1, col_manage2 = st.columns(2)
+            with col2:
+                st.markdown(f"**{set_data.get('name', 'Без названия')}**")
+                if set_data.get("description"):
+                    st.caption(set_data.get("description"))
                 
-                with col_manage1:
-                    save_disabled = not st.session_state.has_unsaved_changes
-                    
-                    if st.button("💾 Сохранить выбор", type="primary", 
-                               disabled=save_disabled, use_container_width=True, key="save_tab1"):
-                        if db.save_database():
-                            sync_selected_sections()
-                            st.success("✅ Выбор сохранен!")
-                            st.session_state.has_unsaved_changes = False
-                            st.rerun()
-                        else:
-                            st.error("❌ Ошибка сохранения")
-                
-                with col_manage2:
-                    if st.session_state.has_unsaved_changes:
-                        st.warning("⚠️ Есть несохраненные изменения")
-                    else:
-                        st.info("💾 Все сохранено")
-        
-        else:
-            st.info("Нет разделов, соответствующих выбранным фильтрам.")
+                # Показываем краткий список глав и статей из набора
+                items = set_data.get("items", [])
+                if items:
+                    summary = format_items_summary(items)
+                    st.caption(summary)
+    
+    st.session_state.selected_ids = selected_ids
+    st.markdown("---")
 
-with tab2:
-    st.subheader("📁 УПРАВЛЕНИЕ РАБОЧИМИ СЕССИЯМИ")
+# Боковая панель
+with st.sidebar:
+    st.header("🚀 Генерация")
     
-    col_create1, col_create2 = st.columns([3, 1])
-    
-    with col_create1:
-        new_session_name = st.text_input(
-            "Имя сессии (оставьте пустым для автоимени):",
-            placeholder="session_жалоба",
-            key="new_session_name"
-        )
-    
-    with col_create2:
-        if st.button("📁 Создать", type="primary", use_container_width=True):
-            templates_data = load_templates()
-            selected_template = get_selected_template(templates_data)
-            template_prompt = selected_template.get("prompt", "") if selected_template else ""
-            
-            session_path = session_manager.create_session(
-                session_name=new_session_name.strip() if new_session_name else None,
-                template_prompt=template_prompt
-            )
-            
-            if session_path:
-                st.session_state.current_session = str(session_path)
-                st.success(f"✅ Создана сессия: {session_path.name}")
-                st.success(f"📝 Шаблон: {selected_template['name'] if selected_template else 'Неизвестно'}")
-                st.rerun()
-            else:
-                st.error("❌ Ошибка при создании сессии")
-    
-    st.markdown("---")
-    
-    sessions = session_manager.list_sessions()
-    
-    if not sessions:
-        st.info("📭 Нет созданных сессий")
-    else:
-        st.markdown(f"### 📂 ВСЕГО СЕССИЙ: {len(sessions)}")
-        
-        search_term = st.text_input("🔍 Поиск сессии:", 
-                                  placeholder="Введите часть имени...")
-        
-        if search_term:
-            filtered_sessions = [s for s in sessions if search_term.lower() in s['session_name'].lower()]
+    # Кнопка генерации перенесена в боковую панель
+    if st.button("📄 Сгенерировать выходной файл", type="primary", use_container_width=True):
+        if has_errors:
+            st.error("❌ Невозможно сгенерировать файл: есть ошибки в структуре sets.json")
+        elif not st.session_state.selected_ids:
+            st.warning("⚠️ Выберите хотя бы один набор для генерации")
         else:
-            filtered_sessions = sessions
-        
-        for session_info in filtered_sessions:
-            with st.expander(f"📁 {session_info['session_name']}", expanded=False):
-                col1, col2 = st.columns([3, 1])
+            with st.spinner("Генерация файла..."):
+                output_path, warnings_list = sets_manager.generate_output(st.session_state.selected_ids)
                 
-                with col1:
-                    created_date = session_info['created'][:10]
-                    st.caption(f"Создана: {created_date}")
+                if output_path:
+                    st.success(f"✅ Файл сохранён")
                     
-                    status_parts = []
-                    if session_info['has_prompt']:
-                        status_parts.append("🎯 Промт")
-                    if session_info['has_materials']:
-                        status_parts.append("📚 Материалы")
-                    if session_info['has_attachments']:
-                        status_parts.append("📎 Папка для вложений")
+                    # Показываем предупреждения
+                    if warnings_list:
+                        with st.expander(f"⚠️ Предупреждения ({len(warnings_list)})"):
+                            for warning in warnings_list:
+                                st.warning(warning)
                     
-                    if status_parts:
-                        st.caption(" • ".join(status_parts))
-                    else:
-                        st.caption("📭 Пустая сессия")
-                
-                with col2:
-                    is_current = (st.session_state.current_session == session_info['session_path'])
-                    
-                    if not is_current:
-                        if st.button("Выбрать", 
-                                   key=f"select_{session_info['session_name']}",
-                                   use_container_width=True):
-                            st.session_state.current_session = session_info['session_path']
-                            st.success(f"✅ Выбрана сессия: {session_info['session_name']}")
-                            st.rerun()
-                    else:
-                        st.success("✅ Активна")
-                
-                col_act1, col_act2, col_act3 = st.columns(3)
-                
-                with col_act1:
-                    selected_count = len(st.session_state.selected_sections)
-                    
-                    if selected_count > 0:
-                        if st.button("📤 Экспорт", 
-                                   key=f"export_{session_info['session_name']}",
-                                   use_container_width=True):
-                            session_path = Path(session_info['session_path'])
-                            success = session_manager.export_to_session(session_path, db)
-                            
-                            if success:
-                                st.success(f"✅ Экспортировано {selected_count} разделов")
-                                st.rerun()
-                            else:
-                                st.error("❌ Ошибка экспорта")
-                    else:
-                        st.caption("Нет выборки")
-                
-                with col_act2:
-                    if st.button("👁️ Просмотр", 
-                               key=f"view_{session_info['session_name']}",
-                               use_container_width=True):
-                        session_path = Path(session_info['session_path'])
-                        st.info(f"**Содержимое сессии:** {session_info['session_name']}")
-                        
-                        if session_info['has_prompt']:
-                            st.write("**Промт:** присутствует (prompt.md)")
-                        else:
-                            st.write("**Промт:** отсутствует")
-                        
-                        if session_info['has_materials']:
-                            st.write("**Материалы:** присутствуют (materials.json)")
-                        else:
-                            st.write("**Материалы:** отсутствуют")
-                        
-                        if session_info['has_attachments']:
-                            st.write("**Вложения:** есть папка для файлов")
-                        else:
-                            st.write("**Вложения:** нет папки")
-                
-                with col_act3:
-                    if st.button("🗑️ Удалить", 
-                               key=f"delete_{session_info['session_name']}",
-                               type="secondary",
-                               use_container_width=True):
-                        session_path = Path(session_info['session_path'])
-                        
-                        try:
-                            if session_path.exists() and session_path.is_dir():
-                                shutil.rmtree(session_path)
-                                
-                                if st.session_state.current_session == str(session_path):
-                                    st.session_state.current_session = None
-                                
-                                st.success(f"✅ Сессия '{session_info['session_name']}' удалена")
-                                st.rerun()
-                            else:
-                                st.error("❌ Сессия не найдена")
-                                st.rerun()
-                                
-                        except Exception as e:
-                            st.error(f"❌ Ошибка при удалении: {e}")
-    
-    st.markdown("---")
-    
-    if st.session_state.current_session:
-        current_path = Path(st.session_state.current_session)
-        
-        if current_path.exists():
-            st.markdown(f"### ✅ АКТИВНАЯ СЕССИЯ: **{current_path.name}**")
-            
-            session_info = session_manager.get_session_info(current_path)
-            
-            col_stat1, col_stat2, col_stat3 = st.columns(3)
-            
-            with col_stat1:
-                if session_info['has_prompt']:
-                    st.success("🎯 Есть промт")
-                else:
-                    st.warning("📭 Нет промта")
-            
-            with col_stat2:
-                if session_info['has_materials']:
-                    st.success("📚 Есть материалы")
-                else:
-                    st.warning("📭 Нет материалов")
-            
-            with col_stat3:
-                if session_info['has_attachments']:
-                    st.info("📎 Есть папка для вложений")
-                else:
-                    st.info("📎 Нет папки для вложений")
-            
-            selected_count = len(st.session_state.selected_sections)
-            
-            if selected_count > 0:
-                if st.button("🚀 БЫСТРЫЙ ЭКСПОРТ В АКТИВНУЮ СЕССИЮ", 
-                           type="primary", 
-                           use_container_width=True):
-                    success = session_manager.export_to_session(current_path, db)
-                    
-                    if success:
-                        st.success(f"✅ Экспортировано {selected_count} разделов")
-                        st.rerun()
-                    else:
-                        st.error("❌ Ошибка экспорта")
-            else:
-                st.info("ℹ️ Выберите разделы во вкладке 'Выбор разделов' для экспорта")
-        else:
-            st.error("❌ Активная сессия не найдена")
-            st.session_state.current_session = None
-    else:
-        st.info("📭 Нет активной сессии. Выберите или создайте сессию.")
-
-with tab3:
-    st.subheader("⚙️ НАСТРОЙКИ СИСТЕМЫ")
-    
-    col_info1, col_info2 = st.columns(2)
-    
-    with col_info1:
-        stats = db.get_database_stats()
-        st.metric("Всего разделов в базе", stats["total_sections"])
-    
-    with col_info2:
-        sync_selected_sections()
-        st.metric("Выбрано разделов", len(st.session_state.selected_sections))
-    
-    st.markdown("---")
-    
-    st.markdown("### 📊 ОСНОВНЫЕ ОПЕРАЦИИ")
-    
-    col_db1, col_db2, col_db3 = st.columns(3)
-    
-    with col_db1:
-        if st.button("🔍 Сканировать папки", type="primary", use_container_width=True):
-            with st.spinner("Сканирую папки..."):
-                db.scan_and_build_database()
-                sync_selected_sections()
-                st.success("✅ База данных обновлена!")
-                st.rerun()
-    
-    with col_db2:
-        if st.button("🗑️ Очистить все выборы", type="secondary", use_container_width=True):
-            cleared = db.clear_selections()
-            if cleared > 0:
-                sync_selected_sections()
-                st.success(f"✅ Очищено {cleared} выборов")
-                st.session_state.has_unsaved_changes = False
-                st.rerun()
-            else:
-                st.info("ℹ️ Нет выбранных разделов для очистки")
-    
-    with col_db3:
-        if st.button("📤 Экспорт выбранных", type="secondary", use_container_width=True):
-            selected_count = len(st.session_state.selected_sections)
-            if selected_count > 0:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                export_path = Path(CONFIG["sessions_path"]) / f"selected_sections_{timestamp}.json"
-                
-                success = db.export_selected_to_json(export_path)
-                if success:
-                    st.success(f"✅ Экспортировано {selected_count} разделов")
-                    
-                    with open(export_path, 'r', encoding='utf-8') as f:
-                        export_data = f.read()
+                    # Кнопка скачивания
+                    with open(output_path, 'r', encoding='utf-8') as f:
+                        file_content = f.read()
                     
                     st.download_button(
-                        label=f"⬇️ Скачать {export_path.name}",
-                        data=export_data,
-                        file_name=export_path.name,
+                        label="⬇️ Скачать файл",
+                        data=file_content,
+                        file_name=Path(output_path).name,
                         mime="application/json",
                         use_container_width=True
                     )
                 else:
-                    st.error("❌ Ошибка экспорта")
-            else:
-                st.info("ℹ️ Нет выбранных разделов для экспорта")
+                    st.error(f"❌ Ошибка: {warnings_list[0] if warnings_list else 'Неизвестная ошибка'}")
     
     st.markdown("---")
-    st.markdown("### 📋 УПРАВЛЕНИЕ ПРАВИЛАМИ РАЗБИЕНИЯ (split_rules.json)")
     
-    all_docs = db.get_all_documents()
+    st.header("📊 Информация")
     
-    if all_docs:
-        selected_doc = st.selectbox("Выберите документ для настройки правил разбиения:", all_docs)
-        
-        if selected_doc:
-            current_rules = db.get_split_rules(selected_doc)
+    # Статистика по папкам
+    st.subheader("📁 Доступные документы")
+    
+    for folder_type, folder_path in CONFIG["folders"].items():
+        folder = Path(folder_path)
+        if folder.exists():
+            files = []
+            for ext in [".md", ".txt"]:
+                files.extend(list(folder.glob(f"*{ext}")))
             
-            with st.form(key=f"split_rules_form_{selected_doc}"):
-                doc_title = st.text_input(
-                    "Название документа (title):",
-                    value=current_rules.get("title", selected_doc.replace('.txt', '').replace('.md', ''))
-                )
-                
-                split_mode = st.radio(
-                    "Режим разбиения:",
-                    options=["chapters", "articles"],
-                    format_func=lambda x: "По главам" if x == "chapters" else "По статьям",
-                    index=1 if current_rules.get("split_by") == "articles" else 0
-                )
-                
-                extract_items = ""
-                if split_mode == "articles":
-                    existing_items = []
-                    if current_rules.get("extract_ranges"):
-                        existing_items.extend(current_rules["extract_ranges"])
-                    if current_rules.get("extract_only"):
-                        existing_items.extend(current_rules["extract_only"])
-                    
-                    extract_items = st.text_area(
-                        "Статьи для извлечения (каждая с новой строки):\n"
-                        "Примеры: 1  или  5-10  или  15\n"
-                        "Если оставить пустым - будут извлечены все статьи",
-                        value="\n".join(existing_items) if existing_items else "",
-                        help="Укажите номера статей или диапазоны"
-                    )
-                
-                if st.form_submit_button("💾 Сохранить правила", type="primary"):
-                    new_rules = {"split_by": split_mode}
-                    
-                    if doc_title:
-                        new_rules["title"] = doc_title
-                    
-                    if split_mode == "articles" and extract_items.strip():
-                        items = [item.strip() for item in extract_items.split('\n') if item.strip()]
-                        
-                        ranges = [item for item in items if '-' in item]
-                        singles = [item for item in items if '-' not in item]
-                        
-                        if ranges:
-                            new_rules["extract_ranges"] = ranges
-                        if singles:
-                            new_rules["extract_only"] = singles
-                    
-                    if db.update_split_rules(selected_doc, new_rules):
-                        st.success(f"✅ Правила для {selected_doc} сохранены!")
-                        st.info("ℹ️ Для применения правил необходимо пересканировать папки")
-                        st.rerun()
-                    else:
-                        st.error("❌ Ошибка сохранения")
+            icon = {
+                "normative": "📖",
+                "methodology": "📚",
+                "structured": "🗂️",
+                "expertise": "👨‍⚖️"
+            }.get(folder_type, "📄")
             
-            if current_rules:
-                if st.button(f"🗑️ Удалить правила для {selected_doc}", type="secondary"):
-                    if db.update_split_rules(selected_doc, {}):
-                        st.success(f"✅ Правила для {selected_doc} удалены!")
-                        st.rerun()
-        
-        st.markdown("---")
-        
-    else:
-        st.info("Нет документов в базе. Сначала выполните сканирование папок.")
+            st.caption(f"{icon} {folder_type}: {len(files)} файлов")
     
     st.markdown("---")
-    st.markdown("### 🎯 ВЫБОР ШАБЛОНА ВОПРОСА")
     
-    templates_data = load_templates()
-    selected_template = get_selected_template(templates_data)
+    # Статистика по наборам
+    st.subheader("📋 Наборы")
+    st.caption(f"Всего наборов: {len(st.session_state.sets)}")
     
-    if selected_template:
-        st.info(f"**Текущий шаблон:** {selected_template['name']}")
-        st.caption(f"{selected_template['description']}")
-    else:
-        st.warning("⚠️ Нет доступных шаблонов")
-    
-    if templates_data:
-        template_options = {t["id"]: t["name"] for t in templates_data}
-        selected_id = st.radio(
-            "Выберите шаблон для новых сессий:",
-            options=list(template_options.keys()),
-            format_func=lambda x: template_options[x],
-            index=list(template_options.keys()).index(selected_template["id"]) if selected_template else 0,
-            key="template_selector"
-        )
-        
-        col_template1, col_template2 = st.columns([1, 2])
-        
-        with col_template1:
-            if st.button("💾 Сохранить выбор шаблона", type="primary", use_container_width=True):
-                updated_templates = update_selected_template(templates_data, selected_id)
-                if save_templates(updated_templates):
-                    st.success(f"✅ Шаблон сохранен: {template_options[selected_id]}")
-                    st.rerun()
-        
-        with col_template2:
-            selected_prompt = next((t["prompt"] for t in templates_data if t["id"] == selected_id), "")
-            
-            if st.button("👁️ Просмотр промта шаблона", use_container_width=True):
-                with st.expander("📝 Промт шаблона", expanded=True):
-                    st.text_area("", value=selected_prompt, height=300, disabled=True, key="template_preview")
-    else:
-        st.info("📭 Нет доступных шаблонов")
+    total_items = sum(len(s.get("items", [])) for s in st.session_state.sets)
+    st.caption(f"Всего элементов: {total_items}")
     
     st.markdown("---")
-    st.markdown("### 📄 КОНФИГУРАЦИЯ")
     
-    config_path = Path(__file__).parent / "config.json"
-    if config_path.exists():
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config_content = f.read()
-        
-        st.download_button(
-            label="⬇️ Скачать config.json",
-            data=config_content,
-            file_name="config.json",
-            mime="application/json",
-            use_container_width=True
-        )
-        
-        with st.expander("👁️ Показать конфигурацию"):
-            st.code(config_content, language="json")
-    else:
-        st.info("Файл config.json не найден")
-        
-        if st.button("📄 Создать config.json", type="primary"):
-            if save_config(CONFIG):
-                st.success("✅ Файл config.json создан")
-                st.rerun()
+    # Редактирование sets.json
+    st.subheader("✏️ Редактирование")
     
-    st.markdown("---")
-    st.markdown("### 📋 ВСЕ ШАБЛОНЫ")
-    
-    if templates_data:
-        for template in templates_data:
-            is_selected = template.get("selected", False)
-            badge = "✅" if is_selected else ""
+    if st.button("📝 Редактировать sets.json", use_container_width=True):
+        sets_path = Path(CONFIG["sets_file"])
+        if sets_path.exists():
+            with open(sets_path, 'r', encoding='utf-8') as f:
+                content = f.read()
             
-            with st.expander(f"{badge} {template['name']}", expanded=False):
-                st.caption(template["description"])
-                st.text_area("Промт:", value=template["prompt"], height=200, disabled=True, key=f"prompt_{template['id']}")
-    else:
-        st.info("📭 Нет доступных шаблонов")
-
-with st.sidebar:
-    st.header("📊 СТАТИСТИКА")
-    
-    sync_selected_sections()
-    
-    stats = db.get_database_stats()
-    
-    st.metric("Всего разделов", stats["total_sections"])
-    st.metric("Всего документов", stats["total_documents"])
-    
-    selected_count = len(st.session_state.selected_sections)
-    st.metric("Выбрано разделов", selected_count)
-    
-    st.markdown("---")
-    st.header("🎯 ШАБЛОН ВОПРОСА")
-    
-    templates_data = load_templates()
-    selected_template = get_selected_template(templates_data)
-    if selected_template:
-        st.caption(f"{selected_template['name']}")
-        st.caption(f"{selected_template['description'][:60]}...")
-    else:
-        st.caption("📭 Нет шаблона")
-    
-    st.markdown("---")
-    st.header("⚡ БЫСТРЫЕ ДЕЙСТВИЯ")
-    
-    if st.session_state.has_unsaved_changes:
-        if st.button("💾 Сохранить выбор", type="primary", use_container_width=True):
-            if db.save_database():
-                sync_selected_sections()
-                st.success("Сохранено!")
-                st.session_state.has_unsaved_changes = False
-                st.rerun()
-            else:
-                st.error("Ошибка сохранения!")
-    
-    if st.session_state.current_session and selected_count > 0:
-        if st.button("📤 Экспорт в активную сессию", type="secondary", use_container_width=True):
-            session_path = Path(st.session_state.current_session)
-            success = session_manager.export_to_session(session_path, db)
-            
-            if success:
-                st.success(f"✅ Экспортировано {selected_count} разделов")
-                st.rerun()
-    
-    if st.button("📁 Создать новую сессию", type="secondary", use_container_width=True):
-        templates_data = load_templates()
-        selected_template = get_selected_template(templates_data)
-        template_prompt = selected_template.get("prompt", "") if selected_template else ""
-        
-        session_path = session_manager.create_session(template_prompt=template_prompt)
-        if session_path:
-            st.session_state.current_session = str(session_path)
-            st.success(f"Создана сессия с шаблоном: {selected_template['name'] if selected_template else 'Без шаблона'}")
-            st.rerun()
-    
-    st.markdown("---")
-    st.header("🛠️ АДМИНИСТРАТИВНЫЕ")
-    
-    if st.button("🔍 Сканировать папки", use_container_width=True, 
-               help="Ручное сканирование папок с документами"):
-        with st.spinner("Сканирую..."):
-            db.scan_and_build_database()
-            sync_selected_sections()
-            st.success("Сканирование завершено!")
-            st.rerun()
-    
-    if selected_count > 0:
-        if st.button(f"📤 Экспорт разделов ({selected_count})", use_container_width=True):
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            export_path = Path(CONFIG["sessions_path"]) / f"export_{timestamp}.json"
-            success = db.export_selected_to_json(export_path)
-            
-            if success:
-                st.success(f"Экспортировано {selected_count} разделов")
-                with open(export_path, 'r', encoding='utf-8') as f:
-                    st.download_button(
-                        label="⬇️ Скачать",
-                        data=f.read(),
-                        file_name=export_path.name,
-                        mime="application/json"
-                    )    
-  
-    st.markdown("---")
-    
-    if st.session_state.current_session:
-        session_path = Path(st.session_state.current_session)
-        if session_path.exists():
-            st.header("✅ АКТИВНАЯ СЕССИЯ")
-            st.markdown(f"**{session_path.name}**")
-            
-            session_info = session_manager.get_session_info(session_path)
-            
-            if session_info['has_prompt']:
-                st.caption("🎯 Есть промт")
-            
-            if session_info['has_materials']:
-                st.caption("📚 Есть материалы")
-            
-            if session_info['has_attachments']:
-                st.caption("📎 Есть папка для вложений")
-            
-            if st.button("📂 Открыть папку", use_container_width=True):
-                st.info(f"Путь: `{session_path}`")
+            st.session_state.show_editor = True
+            st.session_state.sets_content = content
         else:
-            st.warning("❌ Сессия не найдена")
-            st.session_state.current_session = None
-    else:
-        st.info("📭 Нет активной сессии")
-
-    st.markdown("---")
+            st.error("Файл sets.json не найден")
     
-    if st.session_state.current_session:
-        current_path = Path(st.session_state.current_session)
+    if st.session_state.get("show_editor", False):
+        new_content = st.text_area(
+            "Редактирование sets.json",
+            value=st.session_state.get("sets_content", ""),
+            height=400,
+            key="sets_editor"
+        )
         
-        if current_path.exists() and st.button("🔄 Обновить промт сессии", 
-                                             use_container_width=True,
-                                             type="secondary",
-                                             help="Заменит prompt.md на промт из текущего шаблона"):
-            
-            templates_data = load_templates()
-            selected_template = get_selected_template(templates_data)
-            
-            if selected_template:
-                success = session_manager.replace_prompt_from_template(
-                    current_path, 
-                    selected_template["id"]
-                )
-                
-                if success:
-                    st.success(f"✅ Промт обновлен!")
-                    st.rerun()
-                else:
-                    st.error("❌ Ошибка")
-            else:
-                st.warning("⚠️ Нет шаблона")
+        col_save, col_cancel = st.columns(2)
+        
+        with col_save:
+            if st.button("💾 Сохранить", use_container_width=True):
+                try:
+                    # Проверка валидности JSON
+                    parsed = json.loads(new_content)
+                    
+                    # Проверка структуры
+                    is_valid, validation_messages = SetsValidator.validate(parsed)
+                    
+                    if not is_valid:
+                        for msg in validation_messages:
+                            st.error(f"❌ {msg}")
+                    else:
+                        with open(CONFIG["sets_file"], 'w', encoding='utf-8') as f:
+                            f.write(new_content)
+                        st.success("✅ Сохранено!")
+                        st.session_state.sets = sets_manager.load_sets()
+                        st.session_state.show_editor = False
+                        st.rerun()
+                        
+                except json.JSONDecodeError as e:
+                    st.error(f"❌ Ошибка синтаксиса JSON: {e}")
+        
+        with col_cancel:
+            if st.button("❌ Отмена", use_container_width=True):
+                st.session_state.show_editor = False
+                st.rerun()
+    
+    st.markdown("---")
+    st.caption("💡 Формат наборов описан в документации")
+    st.caption("📌 Обязательные поля: id, name, items")
+    st.caption("📌 Допустимые типы: normative, structured, methodology, expertise")
 
+# Вывод при запуске
 print("\n" + "="*60)
 print("🚀 Экспертная система запущена!")
 print("="*60)
