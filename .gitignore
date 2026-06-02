@@ -13,7 +13,7 @@ ENV/
 data/
 *.json
 !config.json
-!sets.json
+# sets.json
 !templates.json
 
 # ==============================================
