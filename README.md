@@ -346,4 +346,3 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ## Лицензия
 
 Для внутреннего использования
-```
